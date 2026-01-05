@@ -1,0 +1,11 @@
+name: app_environment
+channels:
+  - snowflake
+dependencies:
+  - markdown=3.8
+  - plotly=6.5.0
+  - python=3.11.*
+  - rapidfuzz=3.12.1
+  - snowflake-snowpark-python=
+  - streamlit=
+  - tabulate=0.9.0
