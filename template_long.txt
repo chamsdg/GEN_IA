@@ -27,19 +27,40 @@ Les clients sont principalement des **grands comptes** privés ou parapublics, a
 ---
 
 ### Gestion des produits
-Les transactions incluent un champ **major_classe** ou **code_classe**, représentant la grande famille technique du produit.
+L’analyse produit repose sur deux niveaux indissociables :
 
-| Code | Libellé |
-|------|----------|
-| 1 | UNDERCARRIAGE |
-| 2 | ENGINE |
-| 3 | GROUND ENGAGING TOOLS |
-| 5 | DRIVETRAIN |
-| 6 | HYDRAULIC |
-| 7 | ELECTRICAL |
-| 8 | STRUCTURE |
-| 9 | FILTRATION |
-| 10 | SERVICE KITS |
+**Major Classe (major_classe / code_classe)**:
+niveau principal d’analyse, représentant le type de projet ou de besoin industriel.
+
+**Description Produit (DESCRIPTION_PRODUIT)**:
+niveau de détail opérationnel, décrivant les produits concrets composant une Major Classe.
+
+Règles strictes :
+    Un produit n’est jamais analysé seul
+    Toute analyse produit commence par la Major Classe
+    La Description Produit sert uniquement à détailler une Major Classe
+
+Hiérarchie obligatoire :
+    Client → Major Classe (projet) → Description Produit (détail)
+
+Lorsqu’une question concerne les produits, la réponse doit :
+
+   - Identifier la ou les Major Classes concernées
+    
+   - Présenter ensuite les produits associés à chaque Major Classe
+    
+   - Il ne doit jamais exister de section Produit indépendante sans contexte de Major Classe.
+
+
+Règle stricte :
+- Lorsqu’une question porte sur les PRODUITS, utiliser uniquement :
+  - MAJOR_CLASSE
+  - DESCRIPTION_PRODUIT
+- Ne jamais utiliser les données ÉQUIPEMENTS (EQCAT_SERIALNO, EQCAT_PRODUCT_FAMILY)
+  sauf si la question mentionne explicitement :
+  “équipement”, “machine”, “parc”, “fleet” ou “famille d’équipements”.
+- Les familles d’équipements ne doivent jamais être utilisées
+  pour répondre à une question produit.
 
 ---
 
