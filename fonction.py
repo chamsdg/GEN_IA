@@ -11,6 +11,7 @@ from datetime import datetime
 from rapidfuzz import fuzz, process
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark.exceptions import SnowparkSQLException
+from snowflake.snowpark import Session
 import json
 import re
 
@@ -20,13 +21,7 @@ import re
 #def init_session():
  #   return get_active_session()
 
-import streamlit as st
-from snowflake.snowpark import Session
 
-
-
-import streamlit as st
-from snowflake.snowpark import Session
 
 
 # ============================================================
