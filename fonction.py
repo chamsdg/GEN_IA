@@ -25,8 +25,13 @@ from snowflake.snowpark import Session
 
 
 
+import streamlit as st
+from snowflake.snowpark import Session
 
+
+# ============================================================
 # Initialize Snowpark session (Streamlit Cloud compatible)
+# ============================================================
 @st.cache_resource
 def init_session():
     return Session.builder.configs({
@@ -40,69 +45,56 @@ def init_session():
     }).create()
 
 
-session = init_session()
-st.success(
-    f"Snowflake connecté : {session.get_current_user()} | {session.get_current_role()}"
-)
-
-#=========================================================================================================================#
-#                           CHARGEZ LES DONNEES DEPUIS SNOWFLAKE                                                          #
-#=========================================================================================================================#
+# ============================================================
+# Load data from Snowflake (cached 24h)
+# ============================================================
 @st.cache_data(ttl=86400)
 def load_data_from_snowflake():
-    """
-    Charge les données depuis Snowflake et les met en cache pendant 24h.
-    Retourne un dictionnaire de DataFrames.
-    """
     session = init_session()
-    
-    fact_query = """
-        SELECT 
-            *
+
+    fact = session.sql("""
+        SELECT *
         FROM NEEMBA.ML.FACTURE
-    """
-    fact = session.sql(fact_query).to_pandas()
+    """).to_pandas()
 
-    
-    final_query = """
+    final = session.sql("""
         SELECT 
-            RAISON_SOCIALE,TOTAL_VENTES,TOTAL_OPPORTUNITE,
-            POPS,LOST_OPPORTUNITE,ANNEE_MOIS
-        FROM NEEMBA.ML.OPPORTUNITE_MOIS;
-    """
-    final = session.sql(final_query).to_pandas()
+            RAISON_SOCIALE,
+            TOTAL_VENTES,
+            TOTAL_OPPORTUNITE,
+            POPS,
+            LOST_OPPORTUNITE,
+            ANNEE_MOIS
+        FROM NEEMBA.ML.OPPORTUNITE_MOIS
+    """).to_pandas()
 
-
-    opportunite_query = """
+    opportunite_pays = session.sql("""
         SELECT 
-            PAYS,TOTAL_VENTES,TOTAL_OPPORTUNITE,
-            POPS,LOST_OPPORTUNITE,ANNEE_MOIS
-        FROM NEEMBA.ML.OPPORTUNITE_MOIS_PAYS;
-    """
-    opportunite_pays = session.sql(opportunite_query).to_pandas()
-    
+            PAYS,
+            TOTAL_VENTES,
+            TOTAL_OPPORTUNITE,
+            POPS,
+            LOST_OPPORTUNITE,
+            ANNEE_MOIS
+        FROM NEEMBA.ML.OPPORTUNITE_MOIS_PAYS
+    """).to_pandas()
 
-    opportunite_bu_query = """
-    SELECT *
-    FROM NEEMBA.ML.OPPORTUNITE_BU;
-    """
-    opportunite_bu = session.sql(opportunite_bu_query).to_pandas()
+    opportunite_bu = session.sql("""
+        SELECT *
+        FROM NEEMBA.ML.OPPORTUNITE_BU
+    """).to_pandas()
 
-    equipement_query = """
-    SELECT *
-    FROM NEEMBA.ML.EQUIPEMENT
-    """
-    equipement = session.sql(equipement_query).to_pandas()
-
-    
+    equipement = session.sql("""
+        SELECT *
+        FROM NEEMBA.ML.EQUIPEMENT
+    """).to_pandas()
 
     return {
         "fact": fact,
         "final": final,
         "equipement": equipement,
-        "opportunite_pays" : opportunite_pays,
-        "opportunite_bu":  opportunite_bu
-        
+        "opportunite_pays": opportunite_pays,
+        "opportunite_bu": opportunite_bu,
     }
 
 
