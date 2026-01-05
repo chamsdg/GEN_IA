@@ -17,11 +17,33 @@ import re
 
 # Initialize Snowpark session
 @st.cache_resource
+#def init_session():
+ #   return get_active_session()
+
+import streamlit as st
+from snowflake.snowpark import Session
+
+
+
+
+# Initialize Snowpark session (Streamlit Cloud compatible)
+@st.cache_resource
 def init_session():
-    return get_active_session()
+    return Session.builder.configs({
+        "account": st.secrets["snowflake"]["account"],
+        "user": st.secrets["snowflake"]["user"],
+        "password": st.secrets["snowflake"]["password"],
+        "role": st.secrets["snowflake"]["role"],
+        "warehouse": st.secrets["snowflake"]["warehouse"],
+        "database": st.secrets["snowflake"]["database"],
+        "schema": st.secrets["snowflake"]["schema"],
+    }).create()
 
 
-
+session = init_session()
+st.success(
+    f"Snowflake connecté : {session.get_current_user()} | {session.get_current_role()}"
+)
 
 #=========================================================================================================================#
 #                           CHARGEZ LES DONNEES DEPUIS SNOWFLAKE                                                          #
@@ -82,6 +104,8 @@ def load_data_from_snowflake():
         "opportunite_bu":  opportunite_bu
         
     }
+
+
 
 
 
