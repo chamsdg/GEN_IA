@@ -1,7 +1,7 @@
-#sidebar.py
-
+# sidebar.py
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 from fonction import load_data_from_snowflake
 
 
@@ -9,8 +9,30 @@ def render_sidebar():
     with st.sidebar:
         st.subheader("Informations système")
 
+        # ================================
+        # BOUTON RAFRAÎCHISSEMENT MANUEL
+        # ================================
+        if st.button("🔄 Rafraîchir les données"):
+            st.cache_data.clear()
+            st.session_state.last_refresh = None
+            st.rerun()
+
         try:
+            # ================================
+            # CHARGEMENT DONNÉES (CACHE)
+            # ================================
             data = load_data_from_snowflake()
+
+            # ================================
+            # DATE DE DERNIER RAFRAÎCHISSEMENT
+            # ================================
+            if "last_refresh" not in st.session_state or st.session_state.last_refresh is None:
+                st.session_state.last_refresh = datetime.now()
+
+            st.caption(
+                f"🕒 Données mises à jour le "
+                f"{st.session_state.last_refresh.strftime('%d/%m/%Y à %H:%M:%S')}"
+            )
 
             fact = data.get("fact", pd.DataFrame())
             final = data.get("final", pd.DataFrame())
@@ -39,16 +61,28 @@ def render_sidebar():
 
             st.success("Données Snowflake chargées (cache actif)")
 
+            # ================================
+            # STATUT DES TABLES
+            # ================================
             if fact.empty:
                 st.warning("Factures vides")
             else:
                 st.caption(f"📊 Factures : {len(fact)} lignes")
-                st.caption(
-                    f"📅 Dates valides : {fact['date_facture_dt'].notna().sum()}"
-                )
 
-            if final.empty:
-                st.warning("Opportunités vides")
+            if opportunite_pays.empty:
+                st.warning("Opportunités pays vides")
+            else:
+                st.caption(f"📊 Opportunités pays : {len(opportunite_pays)} lignes")
+
+            if opportunite_bu.empty:
+                st.warning("Opportunités BU vides")
+            else:
+                st.caption(f"📊 Opportunités BU : {len(opportunite_bu)} lignes")
+
+            if equipement.empty:
+                st.warning("Équipements vides")
+            else:
+                st.caption(f"📊 Équipements : {len(equipement)} lignes")
 
         except Exception as e:
             st.error("Erreur lors du chargement Snowflake")
