@@ -1,0 +1,15 @@
+name: Keep Streamlit GenAI App Alive
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # toutes les 15 minutes
+  workflow_dispatch:        # lancement manuel possible
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping Streamlit app
+        run: |
+          curl -I https://genianeemba.streamlit.app/
