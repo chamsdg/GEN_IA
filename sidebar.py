@@ -1,3 +1,5 @@
+#sidebar.py
+
 import streamlit as st
 import pandas as pd
 from fonction import load_data_from_snowflake
