@@ -42,6 +42,7 @@ def init_chat_state():
 # ============================================================
 # HISTORY
 # ============================================================
+"""
 def render_history():
     for entry in st.session_state.history:
         with st.chat_message("user", avatar="🧑🏿‍💼"):
@@ -57,6 +58,15 @@ def render_history():
                 """,
                 unsafe_allow_html=True
             )
+
+"""
+def render_history():
+    for entry in st.session_state.history:
+        with st.chat_message("user", avatar="🧑🏿‍💼"):
+            st.markdown(f"🕒 {entry['time']}  \n**{entry['question']}**")
+
+        with st.chat_message("assistant", avatar="🤖"):
+            st.markdown(entry["answer"])
 
 
 # ============================================================
