@@ -26,14 +26,6 @@ def normalize_client(x: str) -> str:
     )
 
 
-import re
-
-def strip_ansi(text: str) -> str:
-    ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
-    return ansi_escape.sub('', text)
-
-
-
 # ============================================================
 # INIT STATE
 # ============================================================
@@ -50,13 +42,24 @@ def init_chat_state():
 # ============================================================
 # HISTORY
 # ============================================================
+
 def render_history():
     for entry in st.session_state.history:
         with st.chat_message("user", avatar="🧑🏿‍💼"):
             st.markdown(f"🕒 {entry['time']}  \n**{entry['question']}**")
 
         with st.chat_message("assistant", avatar="🤖"):
-            st.markdown(entry["answer"])
+            st.markdown(
+                f"""
+                <div style='background-color:#1E90FF; color:white;
+                padding:1rem; border-radius:8px;'>
+                {entry['answer']}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+
 
 # ============================================================
 # INPUT
@@ -98,10 +101,7 @@ def process_question(model, temperature):
             progress=progress
         )
 
-        #st.markdown(answer, unsafe_allow_html=True)
-        clean_answer = strip_ansi(answer)
-        st.markdown(clean_answer)
-
+        st.markdown(answer, unsafe_allow_html=True)
         st.markdown(f"⏱️ **Temps de réponse : {duration:.2f} s**")
 
         # ====================================================
