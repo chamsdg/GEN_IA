@@ -26,6 +26,14 @@ def normalize_client(x: str) -> str:
     )
 
 
+import re
+
+def strip_ansi(text: str) -> str:
+    ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+    return ansi_escape.sub('', text)
+
+
+
 # ============================================================
 # INIT STATE
 # ============================================================
@@ -90,7 +98,10 @@ def process_question(model, temperature):
             progress=progress
         )
 
-        st.markdown(answer, unsafe_allow_html=True)
+        #st.markdown(answer, unsafe_allow_html=True)
+        clean_answer = strip_ansi(answer)
+        st.markdown(clean_answer)
+
         st.markdown(f"⏱️ **Temps de réponse : {duration:.2f} s**")
 
         # ====================================================
