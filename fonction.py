@@ -89,7 +89,7 @@ def load_data_from_snowflake():
         "final": final,
         "equipement": equipement,
         "opportunite_pays": opportunite_pays,
-        "opportunite_bu": opportunite_bu,
+        "opportunite_bu": opportunite_bu
     }
 
 
