@@ -3,7 +3,7 @@ import pandas as pd
 from snowflake.connector.pandas_tools import write_pandas
 import requests
 import sys
-
+import os
 try:
     # =====================================================
     # 1️⃣ LECTURE DU CSV
@@ -36,14 +36,17 @@ try:
     # =====================================================
     # 5️⃣ CONNEXION SNOWFLAKE
     # =====================================================
+
     conn = snowflake.connector.connect(
-        account="A2995708291671-RJ60778",
-        user="achamsedine",
-        password="TF81IarDqblC2jmS",
-        warehouse="COMPUTE_WH",
-        database="NEEMBA",
-        schema="ML"
-    )
+    account=os.environ["SNOWFLAKE_ACCOUNT"],
+    user=os.environ["SNOWFLAKE_USER"],
+    password=os.environ["SNOWFLAKE_PASSWORD"],
+    role=os.environ.get("SNOWFLAKE_ROLE"),
+    warehouse=os.environ["SNOWFLAKE_WAREHOUSE"],
+    database=os.environ["SNOWFLAKE_DATABASE"],
+    schema=os.environ["SNOWFLAKE_SCHEMA"]
+)
+
 
     # =====================================================
     # 6️⃣ INGESTION ULTRA RAPIDE
