@@ -51,6 +51,18 @@ Lorsqu’une question concerne les produits, la réponse doit :
     
    - Il ne doit jamais exister de section Produit indépendante sans contexte de Major Classe.
 
+**Exemple :**
+Analyse produits — SNIM
+
+2-ENGINE : 18,4 M€ (42 %)
+  • Injecteur moteur CAT : 6,1 M€ (33 %)
+  • Kit joint moteur : 4,2 M€ (23 %)
+  • Pompe à carburant : 3,7 M€ (20 %)
+
+6-HYDRAULICS : 11,2 M€ (26 %)
+  • Flexible hydraulique : 4,9 M€ (44 %)
+  • Vérin hydraulique : 3,8 M€ (34 %)
+
 
 Règle stricte :
 - Lorsqu’une question porte sur les PRODUITS, utiliser uniquement :
