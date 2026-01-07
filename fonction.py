@@ -1776,22 +1776,9 @@ def build_major_classe_by_client(
         return f"### {client_name.title()} — Aucune donnée disponible\n"
 
     total_client = df_client["GFD_MONTANT_VENTE_EUROS"].sum()
-    output = ""
+    output = f"### Analyse produits — **{client_name.title()}**\n"
 
-    # Top produits globaux
-    products = (
-        df_client.groupby("DESCRIPTION_PRODUIT")["GFD_MONTANT_VENTE_EUROS"]
-        .sum()
-        .sort_values(ascending=False)
-        .head(n_products)
-    )
-
-    output += f"### Top produits – **{client_name.title()}**\n"
-    for i, (prod, ca) in enumerate(products.items(), start=1):
-        pct = (ca / total_client * 100) if total_client else 0
-        output += f"{i}. {prod} : {ca:,.2f} € ({pct:.1f}%)\n"
-
-    # Top Major Classes
+    # 1️⃣ D'ABORD : Major Classe
     majors = (
         df_client.groupby("MAJOR_CLASSE")["GFD_MONTANT_VENTE_EUROS"]
         .sum()
@@ -1799,12 +1786,13 @@ def build_major_classe_by_client(
         .head(n_major)
     )
 
-    output += f"\n### Top Major Classes – **{client_name.title()}**\n"
     for major_id, ca in majors.items():
         label = labels_map.get(major_id, f"Unknown ({major_id})")
         pct = (ca / total_client * 100) if total_client else 0
-        output += f"- {label} : {ca:,.2f} € ({pct:.1f}%)\n"
 
+        output += f"\n**{label}** : {ca:,.2f} € ({pct:.1f}%)\n"
+
+        # 2️⃣ ENSUITE SEULEMENT : produits de la Major Classe
         df_major = df_client[df_client["MAJOR_CLASSE"] == major_id]
         products_major = (
             df_major.groupby("DESCRIPTION_PRODUIT")["GFD_MONTANT_VENTE_EUROS"]
@@ -1815,7 +1803,7 @@ def build_major_classe_by_client(
 
         for prod, ca_prod in products_major.items():
             pct_prod = (ca_prod / ca * 100) if ca else 0
-            output += f"    • {prod} : {ca_prod:,.2f} € ({pct_prod:.1f}%)\n"
+            output += f"  • {prod} : {ca_prod:,.2f} € ({pct_prod:.1f}%)\n"
 
     return output + "\n"
 
