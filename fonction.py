@@ -2034,6 +2034,63 @@ def is_yearly_analysis(question: str) -> bool:
     q = question.lower()
     return any(k in q for k in keywords)
 
+def build_ca_by_year(
+    df,
+    filter_mask=None,
+    include_ytd_label=True
+):
+    df = df.copy()
+
+    if "date_facture_dt" not in df.columns:
+        return "Aucune donnée temporelle disponible pour une analyse annuelle.\n"
+
+    if filter_mask is not None:
+        df = df[filter_mask]
+
+    if df.empty:
+        return "Aucune donnée disponible pour une analyse annuelle.\n"
+
+    df["year"] = df["date_facture_dt"].dt.year
+
+    yearly = (
+        df.groupby("year")["GFD_MONTANT_VENTE_EUROS"]
+        .sum()
+        .sort_index()
+    )
+
+    table = "### Chiffre d’affaires par année\n\n"
+    table += "| Année | CA (€) |\n|-------|--------|\n"
+
+    current_year = datetime.now().year
+
+    for year, ca in yearly.items():
+        label = str(year)
+        if include_ytd_label and year == current_year:
+            label += " (YTD)"
+        table += f"| {label} | {ca:,.2f} € |\n"
+
+    return table
+
+    
+
+def yearly_analysis_allowed(df, current_year):
+    years = df["date_facture_dt"].dt.year.dropna().unique()
+    complete_years = [y for y in years if y < current_year]
+    return len(complete_years) >= 1
+
+"""
+def is_yearly_analysis(question: str) -> bool:
+    keywords = [
+        "par année",
+        "par an",
+        "annuel",
+        "année par année",
+        "historique annuel",
+        "par exercice"
+    ]
+    q = question.lower()
+    return any(k in q for k in keywords)
+
 
 def build_ca_by_year(
     df,
@@ -2072,7 +2129,7 @@ def build_ca_by_year(
 def yearly_analysis_allowed(df):
     years = df["date_facture_dt"].dt.year.dropna().unique()
     return len(years) >= 3
-
+"""
 
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
@@ -2151,6 +2208,29 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # CAS ANNEE PAR ANNEE
     # =================================================================================
     is_yearly = is_yearly_analysis(question)
+
+    if is_yearly:
+        current_year = today.year
+    
+        # 🔹 Cas avec client
+        if clients_mentionnes:
+            df_target = fact[fact["client_clean"].isin(clients_mentionnes)]
+        else:
+            df_target = fact
+    
+        if yearly_analysis_allowed(df_target, current_year):
+            return build_ca_by_year(
+                df_target,
+                include_ytd_label=True
+            )
+        else:
+            return (
+                "Aucune année complète n’est disponible pour une "
+                "ventilation annuelle exploitable."
+            )
+ 
+"""
+    is_yearly = is_yearly_analysis(question)
     
     if is_yearly and clients_mentionnes:
         df_client = fact[fact["client_clean"].isin(clients_mentionnes)]
@@ -2174,7 +2254,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
                     same_day_last_year
                 )
             )
-
+"""
             
     # =================================================================================
     # RÈGLES MÉTIER SÉMANTIQUES (SERVICE)
