@@ -11,88 +11,77 @@ from datetime import datetime
 from rapidfuzz import fuzz, process
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark.exceptions import SnowparkSQLException
-from snowflake.snowpark import Session
 import json
 import re
 
 
 # Initialize Snowpark session
 @st.cache_resource
-#def init_session():
- #   return get_active_session()
-
-
-
-
-# ============================================================
-# Initialize Snowpark session (Streamlit Cloud compatible)
-# ============================================================
-@st.cache_resource
 def init_session():
-    return Session.builder.configs({
-        "account": st.secrets["snowflake"]["account"],
-        "user": st.secrets["snowflake"]["user"],
-        "password": st.secrets["snowflake"]["password"],
-        "role": st.secrets["snowflake"]["role"],
-        "warehouse": st.secrets["snowflake"]["warehouse"],
-        "database": st.secrets["snowflake"]["database"],
-        "schema": st.secrets["snowflake"]["schema"],
-    }).create()
+    return get_active_session()
 
 
-# ============================================================
-# Load data from Snowflake (cached 24h)
-# ============================================================
+
+
+#=========================================================================================================================#
+#                           CHARGEZ LES DONNEES DEPUIS SNOWFLAKE                                                          #
+#=========================================================================================================================#
 @st.cache_data(ttl=86400)
 def load_data_from_snowflake():
+    """
+    Charge les données depuis Snowflake et les met en cache pendant 24h.
+    Retourne un dictionnaire de DataFrames.
+    """
     session = init_session()
-
-    fact = session.sql("""
-        SELECT *
+    
+    fact_query = """
+        SELECT 
+            *
         FROM NEEMBA.ML.FACTURE
-    """).to_pandas()
+    """
+    fact = session.sql(fact_query).to_pandas()
 
-    final = session.sql("""
+    
+    final_query = """
         SELECT 
-            RAISON_SOCIALE,
-            TOTAL_VENTES,
-            TOTAL_OPPORTUNITE,
-            POPS,
-            LOST_OPPORTUNITE,
-            ANNEE_MOIS
-        FROM NEEMBA.ML.OPPORTUNITE_MOIS
-    """).to_pandas()
+            RAISON_SOCIALE,TOTAL_VENTES,TOTAL_OPPORTUNITE,
+            POPS,LOST_OPPORTUNITE,ANNEE_MOIS
+        FROM NEEMBA.ML.OPPORTUNITE_MOIS;
+    """
+    final = session.sql(final_query).to_pandas()
 
-    opportunite_pays = session.sql("""
+
+    opportunite_query = """
         SELECT 
-            PAYS,
-            TOTAL_VENTES,
-            TOTAL_OPPORTUNITE,
-            POPS,
-            LOST_OPPORTUNITE,
-            ANNEE_MOIS
-        FROM NEEMBA.ML.OPPORTUNITE_MOIS_PAYS
-    """).to_pandas()
+            PAYS,TOTAL_VENTES,TOTAL_OPPORTUNITE,
+            POPS,LOST_OPPORTUNITE,ANNEE_MOIS
+        FROM NEEMBA.ML.OPPORTUNITE_MOIS_PAYS;
+    """
+    opportunite_pays = session.sql(opportunite_query).to_pandas()
+    
 
-    opportunite_bu = session.sql("""
-        SELECT *
-        FROM NEEMBA.ML.OPPORTUNITE_BU
-    """).to_pandas()
+    opportunite_bu_query = """
+    SELECT *
+    FROM NEEMBA.ML.OPPORTUNITE_BU;
+    """
+    opportunite_bu = session.sql(opportunite_bu_query).to_pandas()
 
-    equipement = session.sql("""
-        SELECT *
-        FROM NEEMBA.ML.EQUIPEMENT
-    """).to_pandas()
+    equipement_query = """
+    SELECT *
+    FROM NEEMBA.ML.EQUIPEMENT
+    """
+    equipement = session.sql(equipement_query).to_pandas()
+
+    
 
     return {
         "fact": fact,
         "final": final,
         "equipement": equipement,
-        "opportunite_pays": opportunite_pays,
-        "opportunite_bu": opportunite_bu
+        "opportunite_pays" : opportunite_pays,
+        "opportunite_bu":  opportunite_bu
+        
     }
-
-
 
 
 
@@ -1776,9 +1765,22 @@ def build_major_classe_by_client(
         return f"### {client_name.title()} — Aucune donnée disponible\n"
 
     total_client = df_client["GFD_MONTANT_VENTE_EUROS"].sum()
-    output = f"### Analyse produits — **{client_name.title()}**\n"
+    output = ""
 
-    # 1️⃣ D'ABORD : Major Classe
+    # Top produits globaux
+    products = (
+        df_client.groupby("DESCRIPTION_PRODUIT")["GFD_MONTANT_VENTE_EUROS"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(n_products)
+    )
+
+    output += f"### Top produits – **{client_name.title()}**\n"
+    for i, (prod, ca) in enumerate(products.items(), start=1):
+        pct = (ca / total_client * 100) if total_client else 0
+        output += f"{i}. {prod} : {ca:,.2f} € ({pct:.1f}%)\n"
+
+    # Top Major Classes
     majors = (
         df_client.groupby("MAJOR_CLASSE")["GFD_MONTANT_VENTE_EUROS"]
         .sum()
@@ -1786,13 +1788,12 @@ def build_major_classe_by_client(
         .head(n_major)
     )
 
+    output += f"\n### Top Major Classes – **{client_name.title()}**\n"
     for major_id, ca in majors.items():
         label = labels_map.get(major_id, f"Unknown ({major_id})")
         pct = (ca / total_client * 100) if total_client else 0
+        output += f"- {label} : {ca:,.2f} € ({pct:.1f}%)\n"
 
-        output += f"\n**{label}** : {ca:,.2f} € ({pct:.1f}%)\n"
-
-        # 2️⃣ ENSUITE SEULEMENT : produits de la Major Classe
         df_major = df_client[df_client["MAJOR_CLASSE"] == major_id]
         products_major = (
             df_major.groupby("DESCRIPTION_PRODUIT")["GFD_MONTANT_VENTE_EUROS"]
@@ -1803,7 +1804,7 @@ def build_major_classe_by_client(
 
         for prod, ca_prod in products_major.items():
             pct_prod = (ca_prod / ca * 100) if ca else 0
-            output += f"  • {prod} : {ca_prod:,.2f} € ({pct_prod:.1f}%)\n"
+            output += f"    • {prod} : {ca_prod:,.2f} € ({pct_prod:.1f}%)\n"
 
     return output + "\n"
 
@@ -2078,58 +2079,14 @@ def yearly_analysis_allowed(df, current_year):
     complete_years = [y for y in years if y < current_year]
     return len(complete_years) >= 1
 
-"""
-def is_yearly_analysis(question: str) -> bool:
-    keywords = [
-        "par année",
-        "par an",
-        "annuel",
-        "année par année",
-        "historique annuel",
-        "par exercice"
-    ]
-    q = question.lower()
-    return any(k in q for k in keywords)
+
+import re
+
+def extract_year_from_question(question: str):
+    match = re.search(r"(20\d{2})", question)
+    return int(match.group(1)) if match else None
 
 
-def build_ca_by_year(
-    df,
-    filter_mask=None,
-    include_ytd_label=True
-):
-    df = df.copy()
-    df["year"] = df["date_facture_dt"].dt.year
-
-    if filter_mask is not None:
-        df = df[filter_mask]
-
-    if df.empty:
-        return "Aucune donnée disponible pour une analyse annuelle.\n"
-
-    yearly = (
-        df.groupby("year")["GFD_MONTANT_VENTE_EUROS"]
-        .sum()
-        .sort_index()
-    )
-
-    table = "### Chiffre d’affaires par année\n\n"
-    table += "| Année | CA (€) |\n|-------|--------|\n"
-
-    current_year = datetime.now().year
-
-    for year, ca in yearly.items():
-        label = str(year)
-        if include_ytd_label and year == current_year:
-            label += " (YTD)"
-        table += f"| {label} | {ca:,.2f} € |\n"
-
-    return table
-
-
-def yearly_analysis_allowed(df):
-    years = df["date_facture_dt"].dt.year.dropna().unique()
-    return len(years) >= 3
-"""
 
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
@@ -2207,6 +2164,33 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
     # CAS ANNEE PAR ANNEE
     # =================================================================================
+    year_requested = extract_year_from_question(question)
+
+    if year_requested:
+        df_year = fact[
+            fact["date_facture_dt"].dt.year == year_requested
+        ]
+    
+        if clients_mentionnes:
+            df_year = df_year[
+                df_year["client_clean"].isin(clients_mentionnes)
+            ]
+    
+        if df_year.empty:
+            return (
+                f"Aucune donnée de chiffre d’affaires n’est disponible "
+                f"pour {clients_mentionnes[0].upper()} en {year_requested}."
+            )
+    
+        ca_year = df_year["GFD_MONTANT_VENTE_EUROS"].sum()
+    
+        return (
+            f"En {year_requested}, le chiffre d’affaires réalisé avec "
+            f"{clients_mentionnes[0].upper()} s’élève à "
+            f"{ca_year:,.2f} €."
+        )
+
+    
     is_yearly = is_yearly_analysis(question)
 
     if is_yearly:
@@ -2228,34 +2212,26 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
                 "Aucune année complète n’est disponible pour une "
                 "ventilation annuelle exploitable."
             )
- 
-"""
+    """
     is_yearly = is_yearly_analysis(question)
     
     if is_yearly and clients_mentionnes:
         df_client = fact[fact["client_clean"].isin(clients_mentionnes)]
+        current_year = today.year
     
-        if yearly_analysis_allowed(df_client):
-            client_summary = build_ca_by_year(
+        if yearly_analysis_allowed(df_client, current_year):
+            return build_ca_by_year(
                 df_client,
-                filter_mask=None
+                include_ytd_label=True
             )
         else:
-            client_summary = (
-                "Les données disponibles permettent uniquement une comparaison "
-                "YTD / LYTD. Une ventilation annuelle complète n’est pas disponible.\n\n"
-                + analyze_client_section(
-                    fact,
-                    question,
-                    clients_mentionnes,
-                    today,
-                    start_of_year,
-                    start_of_last_year,
-                    same_day_last_year
-                )
+            return (
+                "Aucune année complète n’est disponible pour une "
+                "ventilation annuelle exploitable."
             )
 """
-            
+
+       
     # =================================================================================
     # RÈGLES MÉTIER SÉMANTIQUES (SERVICE)
     # =================================================================================
@@ -2371,6 +2347,35 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
         "GFD_MONTANT_VENTE_EUROS"
     ].sum()
 
+
+    # =================================================================================
+    # INTERPRÉTATION MÉTIER DE L'ÉVOLUTION (LECTURE ANALYSTE SENIOR)
+    # =================================================================================
+    evolution_label = ""
+    
+    if ca_lytd > 0 and ca_ytd == 0:
+        evolution_label = (
+            f"Aucune facturation n’a été enregistrée à ce stade de l’année en cours, "
+            f"contre {ca_lytd:,.2f} € sur la même période l’an dernier. "
+            "L’activité n’ayant pas encore démarré cette année, "
+            "la comparaison d’évolution n’est pas pertinente à ce stade."
+        )
+    
+    elif ca_lytd == 0 and ca_ytd > 0:
+        evolution_label = (
+            f"Une activité est observée à date cette année, avec un chiffre d’affaires "
+            f"de {ca_ytd:,.2f} €. "
+            "Aucune facturation n’avait été enregistrée sur la même période l’an dernier, "
+            "ce qui ne permet pas une comparaison directe."
+        )
+    
+    else:
+        evolution_label = (
+            "Aucune activité commerciale n’a été enregistrée sur les périodes comparées, "
+            "ni cette année ni sur la même période l’an dernier."
+        )
+
+
     # =================================================================================
     # ASSEMBLAGE FINAL
     # =================================================================================
@@ -2378,6 +2383,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 ## KPI Globaux
 - CA YTD : {ca_ytd:,.2f} €
 - CA LYTD : {ca_lytd:,.2f} €
+- Évolution : {evolution_label}
 
 {client_summary}
 {pays_summary}
