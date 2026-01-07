@@ -1,9 +1,6 @@
 # ====================================================================================================== #
 #                                   SECTION DES LIBRARIES                                                #
 #======================================================================================================= #
-import streamlit as st
-import pandas as pd
-import re
 import time
 import unicodedata
 import json
@@ -11,15 +8,33 @@ from datetime import datetime
 from rapidfuzz import fuzz, process
 from snowflake.snowpark.context import get_active_session
 from snowflake.snowpark.exceptions import SnowparkSQLException
+from snowflake.snowpark import Session
 import json
 import re
 
 
 # Initialize Snowpark session
 @st.cache_resource
-def init_session():
-    return get_active_session()
+#def init_session():
+ #   return get_active_session()
 
+
+
+
+# ============================================================
+# Initialize Snowpark session (Streamlit Cloud compatible)
+# ============================================================
+@st.cache_resource
+def init_session():
+    return Session.builder.configs({
+        "account": st.secrets["snowflake"]["account"],
+        "user": st.secrets["snowflake"]["user"],
+        "password": st.secrets["snowflake"]["password"],
+        "role": st.secrets["snowflake"]["role"],
+        "warehouse": st.secrets["snowflake"]["warehouse"],
+        "database": st.secrets["snowflake"]["database"],
+        "schema": st.secrets["snowflake"]["schema"],
+    }).create()
 
 
 
