@@ -329,50 +329,80 @@ def generate_equipment_summary(equipement: pd.DataFrame, question: str = "") -> 
     """
     Génère :
     - le résumé d'un ou plusieurs clients
-    - OU le classement des clients par nombre d'équipements
+    - OU le classement des clients par nombre d'équipements uniques
+
+    Règles métier :
+    - Si aucun client réel n'est détecté → classement global
+    - Si un faux client est détecté (NLP) → classement global
+    - Si un ou plusieurs clients valides sont détectés → résumé client
     """
 
     if equipement.empty:
         return "Aucune donnée d'équipement disponible."
 
+    # ------------------------------------------------------------------
+    # Préparation des données
+    # ------------------------------------------------------------------
     df = equipement.copy()
 
     df["client_clean"] = (
-        df["RAISON_SOCIALE"].astype(str).str.lower().str.strip()
+        df["RAISON_SOCIALE"]
+        .astype(str)
+        .str.lower()
+        .str.strip()
     )
 
     # équipements uniques
     df_unique = df.drop_duplicates(subset="EQCAT_SERIALNO")
 
+    # ------------------------------------------------------------------
+    # Classement global (calculé UNE SEULE FOIS, source de vérité)
+    # ------------------------------------------------------------------
+    global_ranking = (
+        df_unique
+        .groupby("RAISON_SOCIALE")["EQCAT_SERIALNO"]
+        .count()
+        .sort_values(ascending=False)
+    )
+
+    if global_ranking.empty:
+        return "Aucune donnée exploitable pour le classement."
+
+    top_global_count = global_ranking.iloc[0]
+
+    # ------------------------------------------------------------------
+    # Détection NLP des clients (NON FIABLE → protégé par logique métier)
+    # ------------------------------------------------------------------
     client_list = df["client_clean"].dropna().unique().tolist()
     clients_mentionnes = find_clients_in_question(question, client_list)
     clients_mentionnes = [c.lower().strip() for c in clients_mentionnes]
 
     summary_lines = []
 
-    # ======================================================================================
-    # 🟢 1. AUCUN CLIENT → CLASSEMENT GLOBAL
-    # ======================================================================================
-    if not clients_mentionnes:
-
-        ranking = (
-            df_unique
-            .groupby("RAISON_SOCIALE")["EQCAT_SERIALNO"]
-            .count()
-            .sort_values(ascending=False)
-            .head(10)
+    # ------------------------------------------------------------------
+    # 🟢 CAS 1 : CLASSEMENT GLOBAL
+    # ------------------------------------------------------------------
+    # - aucun client détecté
+    # - OU faux positif NLP (client très minoritaire)
+    # ------------------------------------------------------------------
+    if (
+        not clients_mentionnes
+        or (
+            len(clients_mentionnes) == 1
+            and df_unique[df_unique["client_clean"] == clients_mentionnes[0]].shape[0] < top_global_count
         )
+    ):
 
         summary_lines.append("Classement des clients par nombre d'équipements uniques :")
 
-        for i, (client, count) in enumerate(ranking.items(), start=1):
+        for i, (client, count) in enumerate(global_ranking.head(10).items(), start=1):
             summary_lines.append(f"{i}. {client} : {count} équipements")
 
         return "\n".join(summary_lines)
 
-    # ======================================================================================
-    # 🟣 2. UN OU PLUSIEURS CLIENTS → RÉSUMÉ PAR CLIENT
-    # ======================================================================================
+    # ------------------------------------------------------------------
+    # 🟣 CAS 2 : RÉSUMÉ PAR CLIENT
+    # ------------------------------------------------------------------
     for client in clients_mentionnes:
 
         df_client = df_unique[df_unique["client_clean"] == client]
