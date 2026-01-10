@@ -172,18 +172,7 @@ Exemple de format :
     - Top 5 familles d’équipements (basé sur EQCAT_PRODUCT_FAMILY)
     - Si le client n’a aucune donnée d’équipement, indique : "non trouvé dans les données"
 
-1. Si la question concerne un CLASSEMENT :
-   - Tu dois afficher le classement TEL QUEL.
-   - Tu ne dois PAS ajouter de familles d’équipements.
-   - Tu ne dois PAS reformuler le classement.
-   - Tu ne dois PAS expliquer pourquoi un client est en tête.
-   - Tu ne dois PAS modifier l’ordre.
-   - Tu ne dois PAS limiter ou filtrer autrement que ce qui est fourni.
 
-
-2. Tu dois STRICTEMENT respecter la séparation suivante :
-   - Classement = uniquement des clients + nombre d’équipements.
-   - Résumé client = uniquement UN client + ses familles.
 
 
 
