@@ -327,72 +327,78 @@ def find_bu_in_question(question: str, bu_alias_map: dict) -> list:
 # ====================================================================================================== #
 def generate_equipment_summary(equipement: pd.DataFrame, question: str = "") -> str:
     """
-    Génère un résumé vertical des équipements pour un ou plusieurs clients
-    à partir du DataFrame 'equipement' brut.
-    
-    - Nombre d'équipements uniques par client
-    - Top 5 familles d'équipements par client
+    Génère :
+    - le résumé d'un ou plusieurs clients
+    - OU le classement des clients par nombre d'équipements
     """
-     
+
     if equipement.empty:
         return "Aucune donnée d'équipement disponible."
 
-    equipement = equipement.copy()
+    df = equipement.copy()
 
-    equipement["client_clean"] = (
-        equipement["RAISON_SOCIALE"].astype(str).str.lower().str.strip()
+    df["client_clean"] = (
+        df["RAISON_SOCIALE"].astype(str).str.lower().str.strip()
     )
 
-    client_list = equipement["client_clean"].dropna().unique().tolist()
+    # équipements uniques
+    df_unique = df.drop_duplicates(subset="EQCAT_SERIALNO")
+
+    client_list = df["client_clean"].dropna().unique().tolist()
     clients_mentionnes = find_clients_in_question(question, client_list)
     clients_mentionnes = [c.lower().strip() for c in clients_mentionnes]
 
     summary_lines = []
 
+    # ======================================================================================
+    # 🟢 1. AUCUN CLIENT → CLASSEMENT GLOBAL
+    # ======================================================================================
     if not clients_mentionnes:
-        summary_lines.append("Résumé global des équipements")
 
-        df_unique = equipement.drop_duplicates(subset="EQCAT_SERIALNO")
-        total_unique = df_unique.shape[0]
-        summary_lines.append(f"Nombre total d'équipements uniques : {total_unique}")
+        ranking = (
+            df_unique
+            .groupby("RAISON_SOCIALE")["EQCAT_SERIALNO"]
+            .count()
+            .sort_values(ascending=False)
+            .head(10)
+        )
+
+        summary_lines.append("Classement des clients par nombre d'équipements uniques :")
+
+        for i, (client, count) in enumerate(ranking.items(), start=1):
+            summary_lines.append(f"{i}. {client} : {count} équipements")
+
+        return "\n".join(summary_lines)
+
+    # ======================================================================================
+    # 🟣 2. UN OU PLUSIEURS CLIENTS → RÉSUMÉ PAR CLIENT
+    # ======================================================================================
+    for client in clients_mentionnes:
+
+        df_client = df_unique[df_unique["client_clean"] == client]
+
+        if df_client.empty:
+            summary_lines.append(f"{client.title()} : non trouvé dans les données")
+            continue
+
+        client_name = df_client.iloc[0]["RAISON_SOCIALE"]
+        total_unique = df_client.shape[0]
 
         top_familles = (
-            df_unique["EQCAT_PRODUCT_FAMILY"]
+            df_client["EQCAT_PRODUCT_FAMILY"]
             .value_counts()
             .head(5)
         )
 
+        summary_lines.append(f"Résumé équipements pour {client_name}")
+        summary_lines.append(f"Nombre d'équipements uniques : {total_unique}")
         summary_lines.append("Top 5 familles d'équipements :")
+
         for famille, count in top_familles.items():
             summary_lines.append(f"- {famille} : {count}")
 
-    else:
-        for client in clients_mentionnes:
-            df_client = equipement[equipement["client_clean"] == client]
-
-            if df_client.empty:
-                summary_lines.append(f"{client.title()} : non trouvé dans les données")
-                continue
-
-            df_unique = df_client.drop_duplicates(subset="EQCAT_SERIALNO")
-            total_unique = df_unique.shape[0]
-
-            top_familles = (
-                df_unique["EQCAT_PRODUCT_FAMILY"]
-                .value_counts()
-                .head(5)
-            )
-
-            client_name = df_unique.iloc[0]["RAISON_SOCIALE"]
-
-            summary_lines.append(f"Résumé équipements pour {client_name}")
-            summary_lines.append(f"Nombre d'équipements uniques : {total_unique}")
-            summary_lines.append("Top 5 familles d'équipements :")
-
-            for famille, count in top_familles.items():
-                summary_lines.append(f"- {famille} : {count}")
-
     return "\n".join(summary_lines)
+
 
 
 
