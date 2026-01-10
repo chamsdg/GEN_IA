@@ -172,9 +172,7 @@ Exemple de format :
     - Top 5 familles d’équipements (basé sur EQCAT_PRODUCT_FAMILY)
     - Si le client n’a aucune donnée d’équipement, indique : "non trouvé dans les données"
 
-- Tu n’as PAS le droit de recalculer, trier ou compléter les données.
-- Tu dois uniquement reformuler le contenu fourni.
-- Si le type est "ranking", tu ne dois PAS ajouter de familles.
+
 
 Pour les questions globales, fournir un résumé global des équipements uniques et top 5 familles.
 
