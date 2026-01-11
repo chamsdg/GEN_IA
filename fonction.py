@@ -2130,18 +2130,16 @@ def build_ca_by_year(
 
     
 
-def yearly_analysis_allowed(df, current_year):
-    years = df["date_facture_dt"].dt.year.dropna().unique()
-    complete_years = [y for y in years if y < current_year]
-    return len(complete_years) >= 1
-
-
-import re
 
 def extract_year_from_question(question: str):
     match = re.search(r"(20\d{2})", question)
     return int(match.group(1)) if match else None
 
+
+def extract_years_from_question(question: str) -> list[int]:
+    import re
+    years = re.findall(r"\b(20\d{2})\b", question)
+    return sorted(set(map(int, years)))
 
 
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
@@ -2218,41 +2216,123 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     )
 
     # =================================================================================
-    # CAS ANNEE PAR ANNEE
+    # CAS ANNEE PAR ANNEE - CLIENT
     # =================================================================================
-    year_requested = extract_year_from_question(question)
-
-    if year_requested:
-        df_year = fact[
-            fact["date_facture_dt"].dt.year == year_requested
+    # =================================================================================
+    # CAS COMPARAISON DE DEUX ANNEES
+    # =================================================================================
+    years_requested = extract_years_from_question(question)
+    
+    if years_requested and len(years_requested) == 2:
+        year_1, year_2 = sorted(years_requested)
+    
+        df_compare = fact[
+            fact["date_facture_dt"].dt.year.isin([year_1, year_2])
         ]
     
         if clients_mentionnes:
-            df_year = df_year[
-                df_year["client_clean"].isin(clients_mentionnes)
+            df_compare = df_compare[
+                df_compare["client_clean"].isin(clients_mentionnes)
             ]
     
-        if df_year.empty:
+        if df_compare.empty:
+            if clients_mentionnes:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible "
+                    f"pour {clients_mentionnes[0].upper()} "
+                    f"sur {year_1} et {year_2}."
+                )
+            else:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible "
+                    f"pour les années {year_1} et {year_2}."
+                )
+    
+        ca_by_year = (
+            df_compare
+            .groupby(df_compare["date_facture_dt"].dt.year)
+            ["GFD_MONTANT_VENTE_EUROS"]
+            .sum()
+            .to_dict()
+        )
+    
+        ca_1 = ca_by_year.get(year_1, 0)
+        ca_2 = ca_by_year.get(year_2, 0)
+    
+        evolution = ca_2 - ca_1
+        evolution_pct = (evolution / ca_1 * 100) if ca_1 != 0 else None
+    
+        label_client = (
+            f"avec {clients_mentionnes[0].upper()}"
+            if clients_mentionnes else "au global"
+        )
+    
+        if evolution_pct is not None:
             return (
-                f"Aucune donnée de chiffre d’affaires n’est disponible "
-                f"pour {clients_mentionnes[0].upper()} en {year_requested}."
+                f"Comparaison du chiffre d’affaires {label_client} entre "
+                f"{year_1} et {year_2} :\n\n"
+                f"• {year_1} : {ca_1:,.2f} €\n"
+                f"• {year_2} : {ca_2:,.2f} €\n\n"
+                f"Évolution : {evolution:+,.2f} € "
+                f"({evolution_pct:+.1f} %)."
             )
+        else:
+            return (
+                f"Comparaison du chiffre d’affaires {label_client} entre "
+                f"{year_1} et {year_2} :\n\n"
+                f"• {year_1} : {ca_1:,.2f} €\n"
+                f"• {year_2} : {ca_2:,.2f} €\n\n"
+                f"Évolution : {evolution:+,.2f} € "
+                f"(pourcentage non calculable – CA initial nul)."
+            )
+    
+    
+    # =================================================================================
+    # CAS ANNEE PAR ANNEE
+    # =================================================================================
+    year_requested = extract_year_from_question(question)
+    
+    if year_requested:
+        df_year = fact[fact["date_facture_dt"].dt.year == year_requested]
+    
+        if clients_mentionnes:
+            df_year = df_year[df_year["client_clean"].isin(clients_mentionnes)]
+    
+        if df_year.empty:
+            if clients_mentionnes:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible "
+                    f"pour {clients_mentionnes[0].upper()} en {year_requested}."
+                )
+            else:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible "
+                    f"pour l’année {year_requested}."
+                )
     
         ca_year = df_year["GFD_MONTANT_VENTE_EUROS"].sum()
     
-        return (
-            f"En {year_requested}, le chiffre d’affaires réalisé avec "
-            f"{clients_mentionnes[0].upper()} s’élève à "
-            f"{ca_year:,.2f} €."
-        )
-
+        if clients_mentionnes:
+            return (
+                f"En {year_requested}, le chiffre d’affaires réalisé avec "
+                f"{clients_mentionnes[0].upper()} s’élève à "
+                f"{ca_year:,.2f} €."
+            )
+        else:
+            return (
+                f"En {year_requested}, le chiffre d’affaires total s’élève à "
+                f"{ca_year:,.2f} €."
+            )
     
+    
+    # =================================================================================
+    # CAS ANALYSE ANNUELLE
+    # =================================================================================
     is_yearly = is_yearly_analysis(question)
-
+    
     if is_yearly:
         current_year = today.year
     
-        # 🔹 Cas avec client
         if clients_mentionnes:
             df_target = fact[fact["client_clean"].isin(clients_mentionnes)]
         else:
@@ -2268,26 +2348,9 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
                 "Aucune année complète n’est disponible pour une "
                 "ventilation annuelle exploitable."
             )
-    """
-    is_yearly = is_yearly_analysis(question)
-    
-    if is_yearly and clients_mentionnes:
-        df_client = fact[fact["client_clean"].isin(clients_mentionnes)]
-        current_year = today.year
-    
-        if yearly_analysis_allowed(df_client, current_year):
-            return build_ca_by_year(
-                df_client,
-                include_ytd_label=True
-            )
-        else:
-            return (
-                "Aucune année complète n’est disponible pour une "
-                "ventilation annuelle exploitable."
-            )
-"""
 
-       
+
+
     # =================================================================================
     # RÈGLES MÉTIER SÉMANTIQUES (SERVICE)
     # =================================================================================
