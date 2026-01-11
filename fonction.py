@@ -2141,6 +2141,11 @@ def extract_years_from_question(question: str) -> list[int]:
     years = re.findall(r"\b(20\d{2})\b", question)
     return sorted(set(map(int, years)))
 
+def yearly_analysis_allowed(df, current_year):
+    years = df["date_facture_dt"].dt.year.dropna().unique()
+    complete_years = [y for y in years if y < current_year]
+    return len(complete_years) >= 1
+
 
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
