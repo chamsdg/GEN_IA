@@ -325,26 +325,81 @@ def find_bu_in_question(question: str, bu_alias_map: dict) -> list:
 # ======================================================================================================= #
 #                                        0.EQUIPEMENT & CLIENTS                                           #
 # ====================================================================================================== #
-def generate_equipment_summary(equipement: pd.DataFrame, question: str = "") -> str:
-    """
-    Génère :
-    - le résumé d'un ou plusieurs clients
-    - OU le classement des clients par nombre d'équipements uniques
+def is_ranking_question(question: str) -> bool:
+    if not question:
+        return False
 
-    Règles métier :
-    - Si aucun client réel n'est détecté → classement global
-    - Si un faux client est détecté (NLP) → classement global
-    - Si un ou plusieurs clients valides sont détectés → résumé client
+    q = question.lower()
+
+    patterns = [
+        "classement",
+        "top",
+        "le plus d",
+        "le plus d'",
+        "plus d equip",
+        "plus d'équip",
+        "qui a le plus",
+        "client qui a le plus",
+        "clients qui ont le plus",
+        "plus gros parc"
+    ]
+
+    return any(p in q for p in patterns)
+
+
+def is_dominant_family_question(question: str) -> bool:
+    q = question.lower()
+    triggers = [
+        "famille dominante",
+        "famille principale",
+        "type d'équipement",
+        "équipement dominant",
+        "famille majoritaire",
+        "quel type d'équipement"
+    ]
+    return any(t in q for t in triggers)
+    
+
+def get_dominant_family_for_client(
+    equipement: pd.DataFrame,
+    client: str
+) -> str:
+    df = equipement.copy()
+    df["client_clean"] = df["RAISON_SOCIALE"].str.lower().str.strip()
+
+    df_client = df[df["client_clean"] == client.lower().strip()]
+
+    if df_client.empty:
+        return f"Aucun équipement trouvé pour {client}."
+
+    df_client = df_client.drop_duplicates(subset="EQCAT_SERIALNO")
+
+    top_family = df_client["EQCAT_PRODUCT_FAMILY"].value_counts().idxmax()
+    count = df_client["EQCAT_PRODUCT_FAMILY"].value_counts().max()
+
+    return (
+        f"La famille d'équipements dominante chez {client} est "
+        f"{top_family} avec {count} équipements."
+    )
+
+
+def generate_client_equipment_ranking(
+    equipement: pd.DataFrame,
+    top_n: int = 10
+) -> str:
+    """
+    Génère un classement des clients par nombre d'équipements uniques.
+    
+    - Un équipement = 1 EQCAT_SERIALNO unique
+    - Classement décroissant
     """
 
     if equipement.empty:
         return "Aucune donnée d'équipement disponible."
 
-    # ------------------------------------------------------------------
-    # Préparation des données
-    # ------------------------------------------------------------------
     df = equipement.copy()
 
+    # Normalisation client
     df["client_clean"] = (
         df["RAISON_SOCIALE"]
         .astype(str)
@@ -352,83 +407,128 @@ def generate_equipment_summary(equipement: pd.DataFrame, question: str = "") -> 
         .str.strip()
     )
 
-    # équipements uniques
+    # Suppression des doublons équipements
     df_unique = df.drop_duplicates(subset="EQCAT_SERIALNO")
 
-    # ------------------------------------------------------------------
-    # Classement global (calculé UNE SEULE FOIS, source de vérité)
-    # ------------------------------------------------------------------
-    global_ranking = (
+    # Comptage par client
+    ranking = (
         df_unique
-        .groupby("RAISON_SOCIALE")["EQCAT_SERIALNO"]
-        .count()
-        .sort_values(ascending=False)
+        .groupby("client_clean")
+        .size()
+        .reset_index(name="nb_equipements")
+        .sort_values("nb_equipements", ascending=False)
+        .head(top_n)
     )
 
-    if global_ranking.empty:
-        return "Aucune donnée exploitable pour le classement."
+    if ranking.empty:
+        return "Aucun client trouvé dans les données."
 
-    top_global_count = global_ranking.iloc[0]
+    # Mapping vers nom original
+    client_name_map = (
+        df_unique[["client_clean", "RAISON_SOCIALE"]]
+        .drop_duplicates()
+        .set_index("client_clean")["RAISON_SOCIALE"]
+        .to_dict()
+    )
 
-    # ------------------------------------------------------------------
-    # Détection NLP des clients (NON FIABLE → protégé par logique métier)
-    # ------------------------------------------------------------------
-    client_list = df["client_clean"].dropna().unique().tolist()
+    summary_lines = []
+    summary_lines.append(f"Classement des {top_n} clients par nombre d'équipements")
+
+    for i, row in ranking.iterrows():
+        client_name = client_name_map.get(row["client_clean"], row["client_clean"])
+        summary_lines.append(
+            f"{len(summary_lines)}. {client_name} : {row['nb_equipements']} équipements"
+        )
+
+    return "\n".join(summary_lines)
+
+
+def generate_equipment_summary(equipement: pd.DataFrame, question: str = "") -> str:
+    """
+    Génère un résumé vertical des équipements pour un ou plusieurs clients
+    à partir du DataFrame 'equipement' brut.
+    
+    - Nombre d'équipements uniques par client
+    - Top 5 familles d'équipements par client
+    """
+     
+    if equipement.empty:
+        return "Aucune donnée d'équipement disponible."
+
+    equipement = equipement.copy()
+
+    equipement["client_clean"] = (
+        equipement["RAISON_SOCIALE"].astype(str).str.lower().str.strip()
+    )
+
+    client_list = equipement["client_clean"].dropna().unique().tolist()
     clients_mentionnes = find_clients_in_question(question, client_list)
     clients_mentionnes = [c.lower().strip() for c in clients_mentionnes]
 
+    
+    # 🔴 NOUVEAU : famille dominante
+    if clients_mentionnes and is_dominant_family_question(question):
+        results = []
+        for client in clients_mentionnes:
+            client_name = (
+                equipement[equipement["client_clean"] == client]
+                .iloc[0]["RAISON_SOCIALE"]
+            )
+            results.append(
+                get_dominant_family_for_client(
+                    equipement,
+                    client_name
+                )
+            )
+        return "\n".join(results)
+
+
     summary_lines = []
 
-    # ------------------------------------------------------------------
-    # 🟢 CAS 1 : CLASSEMENT GLOBAL
-    # ------------------------------------------------------------------
-    # - aucun client détecté
-    # - OU faux positif NLP (client très minoritaire)
-    # ------------------------------------------------------------------
-    if (
-        not clients_mentionnes
-        or (
-            len(clients_mentionnes) == 1
-            and df_unique[df_unique["client_clean"] == clients_mentionnes[0]].shape[0] < top_global_count
-        )
-    ):
+    if not clients_mentionnes:
+        summary_lines.append("Résumé global des équipements")
 
-        summary_lines.append("Classement des clients par nombre d'équipements uniques :")
-
-        for i, (client, count) in enumerate(global_ranking.head(10).items(), start=1):
-            summary_lines.append(f"{i}. {client} : {count} équipements")
-
-        return "\n".join(summary_lines)
-
-    # ------------------------------------------------------------------
-    # 🟣 CAS 2 : RÉSUMÉ PAR CLIENT
-    # ------------------------------------------------------------------
-    for client in clients_mentionnes:
-
-        df_client = df_unique[df_unique["client_clean"] == client]
-
-        if df_client.empty:
-            summary_lines.append(f"{client.title()} : non trouvé dans les données")
-            continue
-
-        client_name = df_client.iloc[0]["RAISON_SOCIALE"]
-        total_unique = df_client.shape[0]
+        df_unique = equipement.drop_duplicates(subset="EQCAT_SERIALNO")
+        total_unique = df_unique.shape[0]
+        summary_lines.append(f"Nombre total d'équipements uniques : {total_unique}")
 
         top_familles = (
-            df_client["EQCAT_PRODUCT_FAMILY"]
+            df_unique["EQCAT_PRODUCT_FAMILY"]
             .value_counts()
             .head(5)
         )
 
-        summary_lines.append(f"Résumé équipements pour {client_name}")
-        summary_lines.append(f"Nombre d'équipements uniques : {total_unique}")
         summary_lines.append("Top 5 familles d'équipements :")
-
         for famille, count in top_familles.items():
             summary_lines.append(f"- {famille} : {count}")
 
-    return "\n".join(summary_lines)
+    else:
+        for client in clients_mentionnes:
+            df_client = equipement[equipement["client_clean"] == client]
 
+            if df_client.empty:
+                summary_lines.append(f"{client.title()} : non trouvé dans les données")
+                continue
+
+            df_unique = df_client.drop_duplicates(subset="EQCAT_SERIALNO")
+            total_unique = df_unique.shape[0]
+
+            top_familles = (
+                df_unique["EQCAT_PRODUCT_FAMILY"]
+                .value_counts()
+                .head(5)
+            )
+
+            client_name = df_unique.iloc[0]["RAISON_SOCIALE"]
+
+            summary_lines.append(f"Résumé équipements pour {client_name}")
+            summary_lines.append(f"Nombre d'équipements uniques : {total_unique}")
+            summary_lines.append("Top 5 familles d'équipements :")
+
+            for famille, count in top_familles.items():
+                summary_lines.append(f"- {famille} : {count}")
+
+    return "\n".join(summary_lines)
 
 
 
@@ -2570,35 +2670,29 @@ def clean_llm_text(text: str) -> str:
 #                           UTILISATION DU LLM DEPUIS SNOWFLAKE                                        #
 # ==================================================================================================== #
 
-def ask_llm(question: str, model: str = "llama3.1-8b", temperature: float = 0.1):
+
+def ask_llm(
+    question: str,
+    model: str = "llama3.1-8b",
+    temperature: float = 0.1
+):
     """
-    Utilisation Snowflake Cortex AI avec contexte ventes + opportunités (clients + pays)
+    Utilisation Snowflake Cortex AI avec contexte ventes + opportunités + équipements
     """
 
-    """
-    # --- Chargement des données --- #
-    data = load_data_from_snowflake()
-    fact = data['fact']         
-    final = data['final']        
-    equipement = data['equipement']
-    opportunite_pays = data['opportunite_pays']
-    opportunite_bu = data['opportunite_bu']
-"""
-
+    # --- Chargement des données depuis la session --- #
     fact = st.session_state.get("fact")
     final = st.session_state.get("final")
     equipement = st.session_state.get("equipement")
     opportunite_pays = st.session_state.get("opportunite_pays")
     opportunite_bu = st.session_state.get("opportunite_bu")
-    
+
     if fact is None or fact.empty:
         return {
             "source": "error",
             "response": "⚠️ Données non chargées. Veuillez rafraîchir l’application."
         }
 
-
-    
     # --- Contexte Ventes --- #
     context = generate_summary(fact, question=question)
 
@@ -2611,26 +2705,36 @@ def ask_llm(question: str, model: str = "llama3.1-8b", temperature: float = 0.1)
 
     # --- Contexte Opportunités par pays --- #
     try:
-        context_olga_countries = generate_olga_by_country(opportunite_pays, question=question)
+        context_olga_countries = generate_olga_by_country(
+            opportunite_pays, question=question
+        )
     except Exception as e:
         print(f"⚠️ Erreur dans generate_olga_by_country: {e}")
         context_olga_countries = "Aucune donnée d'opportunité par pays disponible."
 
-
-     # --- Contexte Opportunités par bu --- #
-    try:
-        context_olga_bu = generate_olga_bu(opportunite_bu, question=question, bu_alias_map=bu_alias_map)
-    except Exception as e:
-        print(f"⚠️ Erreur dans generate_olga_bu: {e}")
-        context_olga_bu = "Aucune donnée d'opportunité par bu disponible."
-
-
     # --- Contexte Equipement Client --- #
     try:
-        context_equipement_client = generate_equipment_summary(equipement, question=question)
+        if is_ranking_question(question):
+            context_equipement_client = generate_client_equipment_ranking(equipement)
+        else:
+            context_equipement_client = generate_equipment_summary(
+                equipement, question=question
+            )
     except Exception as e:
-        print(f"⚠️ Erreur dans generate_equipment_summary: {e}")
-        context_equipement_client = "Aucune donnée d'equipement disponible pour ce client."
+        print(f"⚠️ Erreur dans le contexte équipement: {e}")
+        context_equipement_client = "Aucune donnée d'équipement disponible."
+
+    # --- Contexte Opportunités par BU --- #
+    try:
+        context_olga_bu = generate_olga_bu(
+            opportunite_bu,
+            question=question,
+            bu_alias_map=bu_alias_map
+        )
+    except Exception as e:
+        print(f"⚠️ Erreur dans generate_olga_bu: {e}")
+        context_olga_bu = "Aucune donnée d'opportunité par BU disponible."
+
 
     # --- Création du prompt final
     formatted_prompt = format_prompt(question, context, context_olga, context_olga_countries,context_equipement_client,context_olga_bu)
