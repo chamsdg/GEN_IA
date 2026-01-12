@@ -11,7 +11,7 @@ from llm_runner import run_llm
 from intent import is_evolution_question, is_comparison_question
 from ventes import build_monthly_sales, build_monthly_sales_by_client
 from charts import build_line_chart, build_multi_line_chart
-
+from charts import build_evolution_title
 
  
 
@@ -42,7 +42,6 @@ def init_chat_state():
 # ============================================================
 # HISTORY
 # ============================================================
-
 def render_history():
     for entry in st.session_state.history:
         with st.chat_message("user", avatar="🧑🏿‍💼"):
@@ -58,7 +57,6 @@ def render_history():
                 """,
                 unsafe_allow_html=True
             )
-
 
 
 # ============================================================
@@ -104,53 +102,114 @@ def process_question(model, temperature):
         st.markdown(answer, unsafe_allow_html=True)
         st.markdown(f"⏱️ **Temps de réponse : {duration:.2f} s**")
 
-        # ====================================================
-        # 2️⃣ SI QUESTION = ÉVOLUTION → GRAPH INTELLIGENT
-        # ====================================================
-        if is_evolution_question(question):
+    # ====================================================
+    # 2️⃣ SI QUESTION = ÉVOLUTION → GRAPH INTELLIGENT
+    # ====================================================
 
-            # 🔹 Récupération des données de ventes
-            fact = st.session_state.get("fact", pd.DataFrame())
+    if is_evolution_question(question):
+    
+        # 🔹 Récupération des données de ventes
+        fact = st.session_state.get("fact", pd.DataFrame())
+    
+        if not fact.empty and "RAISON_SOCIALE" in fact.columns:
+    
+            # 🔹 Liste clients disponibles
+            client_list = (
+                fact["RAISON_SOCIALE"]
+                .dropna()
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+    
+            # 🔍 Détection fuzzy des clients
+            # 🔍 Détection fuzzy des clients
+            # 🔍 Détection fuzzy des clients
+            clients_detectes = find_clients_in_question(
+                question=question,
+                client_list=client_list
+            )
+            
+            # ✅ FORÇAGE MONO-CLIENT SI NOM EXPLICITE DANS LA QUESTION
+            question_lower = question.lower()
+            # 🔍 Détection fuzzy des clients
+            clients_detectes = find_clients_in_question(
+                question=question,
+                client_list=client_list
+            )
+            
+            question_lower = question.lower()
+            
+            # 🔒 Détection explicite de comparaison
+            comparison_markers = [" vs ", " et ", " entre ", "compar", " versus "]
+            is_comparison = any(m in question_lower for m in comparison_markers)
+            
+            # ✅ Forcer mono-client UNIQUEMENT s'il n'y a PAS de comparaison
+            if not is_comparison:
+                for client in client_list:
+                    if client.lower() in question_lower:
+                        clients_detectes = [client]
+                        break
 
-            if not fact.empty and "RAISON_SOCIALE" in fact.columns:
+            """
+            for client in client_list:
+                if client.lower() in question_lower:
+                    clients_detectes = [client]
+                    break
 
-                # 🔹 Liste clients disponibles
-                client_list = (
-                    fact["RAISON_SOCIALE"]
-                    .dropna()
-                    .astype(str)
-                    .unique()
-                    .tolist()
+            
+            clients_detectes = find_clients_in_question(
+                question=question,
+                client_list=client_list
+            )
+            """
+    
+            # 🔹 Filtrage selon le contexte détecté
+            if len(clients_detectes) == 1:
+                fact_filtered = fact[
+                    fact["RAISON_SOCIALE"] == clients_detectes[0]
+                ]
+                title = f"📈 Évolution mensuelle des ventes – {clients_detectes[0]}"
+    
+            elif len(clients_detectes) > 1:
+                fact_filtered = fact[
+                    fact["RAISON_SOCIALE"].isin(clients_detectes)
+                ]
+                title = "📈 Évolution mensuelle des ventes – Comparaison clients"
+    
+            else:
+                fact_filtered = fact
+                title = "📈 Évolution mensuelle des ventes (global)"
+    
+            # 🔹 Construction des données mensuelles
+            df_monthly = build_monthly_sales(fact_filtered)
+    
+            # 🔹 Tracé du graphique
+            title = build_evolution_title(clients_detectes)
+
+            if not df_monthly.empty:
+
+                if len(clients_detectes) > 1:
+                    fig = build_multi_line_chart(
+                    df=df_monthly,
+                    x_col="ANNEE_MOIS",
+                    y_col="total_sales",
+                    color_col="RAISON_SOCIALE",
+                    title=title,
+                    y_label="CA (€)"
                 )
+                    """
 
-                # 🔍 Détection fuzzy des clients (SNIM, etc.)
-                clients_detectes = find_clients_in_question(
-                    question=question,
-                    client_list=client_list
-                )
-
-                # 🔹 Filtrage selon le contexte détecté
-                if len(clients_detectes) == 1:
-                    fact_filtered = fact[
-                        fact["RAISON_SOCIALE"] == clients_detectes[0]
-                    ]
-                    title = f"📈 Évolution mensuelle des ventes – {clients_detectes[0]}"
-
-                elif len(clients_detectes) > 1:
-                    fact_filtered = fact[
-                        fact["RAISON_SOCIALE"].isin(clients_detectes)
-                    ]
-                    title = "📈 Évolution mensuelle des ventes – Comparaison clients"
-
+                    fig = build_multi_line_chart(
+                        df=df_monthly,
+                        x_col="ANNEE_MOIS",
+                        y_col="total_sales",
+                        color_col="RAISON_SOCIALE",
+                        title=title,
+                        y_label="CA (€)"
+                    )
+                    """
                 else:
-                    fact_filtered = fact
-                    title = "📈 Évolution mensuelle des ventes (global)"
-
-                # 🔹 Construction des données mensuelles
-                df_monthly = build_monthly_sales(fact_filtered)
-
-                # 🔹 Tracé du graphique
-                if not df_monthly.empty:
                     fig = build_line_chart(
                         df=df_monthly,
                         x_col="ANNEE_MOIS",
@@ -158,19 +217,20 @@ def process_question(model, temperature):
                         title=title,
                         y_label="CA (€)"
                     )
+            
+                st.plotly_chart(fig, use_container_width=True)
 
-                    st.plotly_chart(fig, use_container_width=True)
-
-        # ====================================================
-        # 3️⃣ Historique
-        # ====================================================
-        st.session_state.history.append({
-            "time": time.strftime("%H:%M:%S"),
-            "question": question,
-            "answer": answer
-        })
-
-
+    
+    # ====================================================
+    # 3️⃣ Historique
+    # ====================================================
+    st.session_state.history.append({
+        "time": time.strftime("%H:%M:%S"),
+        "question": question,
+        "answer": answer
+    })
+    
+    
 
 # ============================================================
 # SEARCH
