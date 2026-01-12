@@ -1,6 +1,6 @@
 # ventes.py
 import pandas as pd
-
+"""
 def build_monthly_sales(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "date_facture_dt" not in df.columns:
         return pd.DataFrame()
@@ -21,6 +21,35 @@ def build_monthly_sales(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     return monthly
+"""
+
+def build_monthly_sales(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "date_facture_dt" not in df.columns:
+        return pd.DataFrame()
+
+    df = df.copy()
+    df = df.dropna(subset=["date_facture_dt"])
+
+    df["ANNEE_MOIS"] = (
+        df["date_facture_dt"]
+        .dt.to_period("M")
+        .astype(str)
+    )
+
+    group_cols = ["ANNEE_MOIS"]
+    if "RAISON_SOCIALE" in df.columns:
+        group_cols.append("RAISON_SOCIALE")
+
+    monthly = (
+        df
+        .groupby(group_cols, as_index=False)
+        .agg(total_sales=("GFD_MONTANT_VENTE_EUROS", "sum"))
+        .sort_values(group_cols)
+    )
+
+    return monthly
+
+
 
 
 def normalize_client(x: str) -> str:
