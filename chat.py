@@ -110,6 +110,17 @@ def process_question(model, temperature):
     
         # 🔹 Récupération des données de ventes
         fact = st.session_state.get("fact", pd.DataFrame())
+       
+        
+        # Sécurité : copie
+        fact = fact.copy()
+        
+        # 🔹 Conversion robuste de la date
+        fact["date_facture_dt"] = pd.to_datetime(
+        fact["DATE_FACTURE"], errors="coerce"
+    )
+
+
     
         if not fact.empty and "RAISON_SOCIALE" in fact.columns:
     
@@ -165,41 +176,44 @@ def process_question(model, temperature):
             """
     
             # 🔹 Filtrage selon le contexte détecté
+            # 🔹 Filtrage des données
+            # 🔹 Filtrage selon le contexte détecté
+            #if len(clients_detectes) == 1:
+            # 🔹 Détection & filtrage des clients
             if len(clients_detectes) == 1:
+                client = clients_detectes[0]
+            
                 fact_filtered = fact[
-                    fact["RAISON_SOCIALE"] == clients_detectes[0]
+                    fact["RAISON_SOCIALE"] == client
                 ]
-                title = f"📈 Évolution mensuelle des ventes – {clients_detectes[0]}"
-    
+                group_by_client = False
+            
             elif len(clients_detectes) > 1:
                 fact_filtered = fact[
                     fact["RAISON_SOCIALE"].isin(clients_detectes)
                 ]
-                title = "📈 Évolution mensuelle des ventes – Comparaison clients"
-    
+                group_by_client = True
+            
             else:
                 fact_filtered = fact
-                title = "📈 Évolution mensuelle des ventes (global)"
-    
-            # 🔹 Construction des données mensuelles
-            df_monthly = build_monthly_sales(fact_filtered)
-    
-            # 🔹 Tracé du graphique
+                group_by_client = False
+            
+            
+            # 🔹 Construction du titre (UNE seule fois)
             title = build_evolution_title(clients_detectes)
-
+            
+            
+            # 🔹 Construction des données mensuelles
+            df_monthly = build_monthly_sales(
+                fact_filtered,
+                group_by_client=group_by_client
+            )
+            
+            
+            # 🔹 Tracé du graphique
             if not df_monthly.empty:
-
-                if len(clients_detectes) > 1:
-                    fig = build_multi_line_chart(
-                    df=df_monthly,
-                    x_col="ANNEE_MOIS",
-                    y_col="total_sales",
-                    color_col="RAISON_SOCIALE",
-                    title=title,
-                    y_label="CA (€)"
-                )
-                    """
-
+            
+                if group_by_client and "RAISON_SOCIALE" in df_monthly.columns:
                     fig = build_multi_line_chart(
                         df=df_monthly,
                         x_col="ANNEE_MOIS",
@@ -208,7 +222,6 @@ def process_question(model, temperature):
                         title=title,
                         y_label="CA (€)"
                     )
-                    """
                 else:
                     fig = build_line_chart(
                         df=df_monthly,
@@ -219,6 +232,12 @@ def process_question(model, temperature):
                     )
             
                 st.plotly_chart(fig, use_container_width=True)
+            
+            else:
+                st.info("Aucune donnée disponible pour cette requête.")
+
+
+
 
     
     # ====================================================
