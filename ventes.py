@@ -23,31 +23,45 @@ def build_monthly_sales(df: pd.DataFrame) -> pd.DataFrame:
     return monthly
 """
 
-def build_monthly_sales(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty or "date_facture_dt" not in df.columns:
+def build_monthly_sales(
+    df: pd.DataFrame,
+    group_by_client: bool = False
+) -> pd.DataFrame:
+
+    if df.empty or "DATE_FACTURE" not in df.columns:
         return pd.DataFrame()
 
     df = df.copy()
-    df = df.dropna(subset=["date_facture_dt"])
 
-    df["ANNEE_MOIS"] = (
-        df["date_facture_dt"]
-        .dt.to_period("M")
-        .astype(str)
+    # 🔹 Conversion UNIQUE et fiable de la date
+    df["date_facture_dt"] = pd.to_datetime(
+        df["DATE_FACTURE"],
+        errors="coerce"
     )
 
+    df = df.dropna(subset=["date_facture_dt"])
+
+    # 🔹 Groupement mensuel (Period)
+    df["ANNEE_MOIS"] = df["date_facture_dt"].dt.to_period("M")
+
     group_cols = ["ANNEE_MOIS"]
-    if "RAISON_SOCIALE" in df.columns:
+    if group_by_client and "RAISON_SOCIALE" in df.columns:
         group_cols.append("RAISON_SOCIALE")
 
     monthly = (
         df
         .groupby(group_cols, as_index=False)
-        .agg(total_sales=("GFD_MONTANT_VENTE_EUROS", "sum"))
-        .sort_values(group_cols)
+        .agg(
+            total_sales=("GFD_MONTANT_VENTE_EUROS", "sum")
+        )
     )
 
+    # 🔹 CONVERSION CRUCIALE POUR PLOTLY
+    monthly["ANNEE_MOIS"] = monthly["ANNEE_MOIS"].dt.to_timestamp()
+    monthly = monthly.sort_values("ANNEE_MOIS")
+
     return monthly
+
 
 
 
