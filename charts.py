@@ -30,7 +30,46 @@ def build_line_chart(
 
 
 
+def build_multi_line_chart(
+    df,
+    x_col,
+    y_col,
+    color_col,
+    title,
+    y_label
+):
+    # 🔐 Sécurité : on vérifie que la colonne existe
+    color_arg = color_col if color_col in df.columns else None
 
+    fig = px.line(
+        df,
+        x=x_col,
+        y=y_col,
+        color=color_arg,
+        markers=True,
+        title=title,
+        text=y_col
+    )
+
+    fig.update_traces(
+        texttemplate="%{y:.2s} €",
+        textposition="top center"
+    )
+
+    fig.update_layout(
+        yaxis=dict(
+            title=y_label,
+            tickformat="~s"
+        ),
+        xaxis_title="Mois",
+        hovermode="x unified",
+        legend_title_text=color_col if color_arg else "",
+        template="plotly_white"
+    )
+
+    return fig
+
+"""
 def build_multi_line_chart(
     df,
     x_col,
@@ -69,7 +108,7 @@ def build_multi_line_chart(
 
     return fig
 
-
+"""
 
 def build_evolution_title(clients: list) -> str:
     if not clients:
