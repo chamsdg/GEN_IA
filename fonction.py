@@ -2272,7 +2272,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     )
 
     fact["date_facture_dt"] = pd.to_datetime(
-        fact["DATE_FACTURE"], errors="coerce", dayfirst=True
+        fact["DATE_FACTURE"], errors="coerce"
     )
 
 
