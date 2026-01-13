@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import time
+import re
 
 from fonction import clean_html_tags, markdown_to_html,find_clients_in_question
 from llm_runner import run_llm
@@ -13,7 +14,56 @@ from ventes import build_monthly_sales, build_monthly_sales_by_client
 from charts import build_line_chart, build_multi_line_chart
 from charts import build_evolution_title
 
- 
+
+
+
+
+def detect_clients_for_comparison(
+    question: str,
+    client_list: list,
+    max_clients: int = 2
+) -> list:
+    
+
+    q_lower = question.lower()
+
+    # 1️⃣ clients explicitement cités (PRIORITÉ ABSOLUE)
+    explicit_clients = [
+        client for client in client_list
+        if client.lower() in q_lower
+    ]
+
+    # 2️⃣ fallback : fuzzy global (fonction existante)
+    fuzzy_clients = find_clients_in_question(question, client_list)
+
+    # 3️⃣ union en respectant la priorité
+    ordered_clients = []
+
+    for client in explicit_clients:
+        if client not in ordered_clients:
+            ordered_clients.append(client)
+
+    for client in fuzzy_clients:
+        if client not in ordered_clients:
+            ordered_clients.append(client)
+
+    # 4️⃣ suppression des clients parents (groupe vs filiale)
+    def remove_parent_clients(clients):
+        result = []
+        for c in clients:
+            if not any(
+                c != other and c.lower() in other.lower()
+                for other in clients
+            ):
+                result.append(c)
+        return result
+
+    ordered_clients = remove_parent_clients(ordered_clients)
+
+    # 5️⃣ limite stricte
+    return ordered_clients[:max_clients]
+
+
 
 def normalize_client(x: str) -> str:
     return (
@@ -136,18 +186,16 @@ def process_question(model, temperature):
             # 🔍 Détection fuzzy des clients
             # 🔍 Détection fuzzy des clients
             # 🔍 Détection fuzzy des clients
-            clients_detectes = find_clients_in_question(
-                question=question,
-                client_list=client_list
-            )
+           # clients_detectes = find_clients_in_question(
+           #     question=question,
+          #      client_list=client_list
+           # )
+            clients_detectes = detect_clients_for_comparison(question, client_list)
             
             # ✅ FORÇAGE MONO-CLIENT SI NOM EXPLICITE DANS LA QUESTION
             question_lower = question.lower()
             # 🔍 Détection fuzzy des clients
-            clients_detectes = find_clients_in_question(
-                question=question,
-                client_list=client_list
-            )
+            
             
             question_lower = question.lower()
             
