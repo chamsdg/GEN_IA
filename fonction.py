@@ -106,8 +106,14 @@ def load_data_from_snowflake():
 
 
 
+
+
+
 #st.write("Colonnes de la table FACT :")
 #st.write(fact.columns.tolist())
+
+
+
 
 
 # fonction pour changer le template
@@ -135,10 +141,10 @@ def format_prompt(question: str, context: str, context_olga: str,context_olga_co
 #                FONCTION POUR TROUVER LES CLIENTS DANS LA QUESTION                                  #
 # ================================================================================================== #
 
-def find_clients_in_question(question: str, client_list: list, threshold: int = 75):
-    """
-    Cherche tous les clients mentionnés dans la question (tolère les noms incomplets).
-    """
+def find_clients_in_question(question: str, client_list: list, threshold: int = 80):
+    
+    #Cherche tous les clients mentionnés dans la question (tolère les noms incomplets).
+    
     keywords = re.findall(r'\b[a-zA-Z]{3,}\b', question.lower())
 
     if not keywords:
@@ -168,7 +174,6 @@ def find_clients_in_question(question: str, client_list: list, threshold: int = 
             found_clients.append(client)
 
     return found_clients
-
 
 
 def strip_accents(text: str) -> str:
@@ -1000,7 +1005,7 @@ def generate_olga_bu(
 #                                       2.1 SECTION  SERVICE                                                  #
 # ====================================================================================================== #
 
-#Détection période “X derniers mois”
+# Détection période “X derniers mois”
 def extract_period_bounds(question, today, start_of_year):
     match = re.search(r"(\d{1,2})\s*(dernier|derniers)\s*mois", question.lower())
     if match:
@@ -2230,6 +2235,13 @@ def build_ca_by_year(
 
     
 
+def yearly_analysis_allowed(df, current_year):
+    years = df["date_facture_dt"].dt.year.dropna().unique()
+    complete_years = [y for y in years if y < current_year]
+    return len(complete_years) >= 1
+
+
+
 
 def extract_year_from_question(question: str):
     match = re.search(r"(20\d{2})", question)
@@ -2240,11 +2252,6 @@ def extract_years_from_question(question: str) -> list[int]:
     import re
     years = re.findall(r"\b(20\d{2})\b", question)
     return sorted(set(map(int, years)))
-
-def yearly_analysis_allowed(df, current_year):
-    years = df["date_facture_dt"].dt.year.dropna().unique()
-    complete_years = [y for y in years if y < current_year]
-    return len(complete_years) >= 1
 
 
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
@@ -2269,11 +2276,13 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
         .str.lower()
         .str.strip()
         .str.replace(r"[^\w\s]", "", regex=True)
-    )
+    ) # dayfirst=True
 
     fact["date_facture_dt"] = pd.to_datetime(
         fact["DATE_FACTURE"], errors="coerce"
     )
+
+    
 
 
 
@@ -2326,25 +2335,50 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
     # CAS COMPARAISON DE DEUX ANNEES
     # =================================================================================
+    #years_requested = extract_years_from_question(question)
+    
+ 
     years_requested = extract_years_from_question(question)
     
     if years_requested and len(years_requested) == 2:
         year_1, year_2 = sorted(years_requested)
     
+        # Filtrage par années
         df_compare = fact[
             fact["date_facture_dt"].dt.year.isin([year_1, year_2])
         ]
     
+        # Filtrage par client
         if clients_mentionnes:
             df_compare = df_compare[
                 df_compare["client_clean"].isin(clients_mentionnes)
             ]
     
+        # Filtrage par pays
+        if pays_mentionnes:
+            df_compare = df_compare[
+                df_compare["pays_clean"].isin(pays_mentionnes)
+            ]
+    
+        # Aucun résultat
         if df_compare.empty:
-            if clients_mentionnes:
+            if clients_mentionnes and pays_mentionnes:
                 return (
                     f"Aucune donnée de chiffre d’affaires n’est disponible "
                     f"pour {clients_mentionnes[0].upper()} "
+                    f"au {pays_mentionnes[0].upper()} "
+                    f"sur {year_1} et {year_2}."
+                )
+            elif clients_mentionnes:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible "
+                    f"pour {clients_mentionnes[0].upper()} "
+                    f"sur {year_1} et {year_2}."
+                )
+            elif pays_mentionnes:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible "
+                    f"pour le {pays_mentionnes[0].upper()} "
                     f"sur {year_1} et {year_2}."
                 )
             else:
@@ -2353,6 +2387,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
                     f"pour les années {year_1} et {year_2}."
                 )
     
+        # Calcul CA par année
         ca_by_year = (
             df_compare
             .groupby(df_compare["date_facture_dt"].dt.year)
@@ -2367,14 +2402,23 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
         evolution = ca_2 - ca_1
         evolution_pct = (evolution / ca_1 * 100) if ca_1 != 0 else None
     
-        label_client = (
-            f"avec {clients_mentionnes[0].upper()}"
-            if clients_mentionnes else "au global"
-        )
+        # Libellé périmètre
+        if clients_mentionnes and pays_mentionnes:
+            label_scope = (
+                f"avec {clients_mentionnes[0].upper()} "
+                f"au {pays_mentionnes[0].upper()}"
+            )
+        elif clients_mentionnes:
+            label_scope = f"avec {clients_mentionnes[0].upper()}"
+        elif pays_mentionnes:
+            label_scope = f"au {pays_mentionnes[0].upper()}"
+        else:
+            label_scope = "au global"
     
+        # Réponse
         if evolution_pct is not None:
             return (
-                f"Comparaison du chiffre d’affaires {label_client} entre "
+                f"Comparaison du chiffre d’affaires {label_scope} entre "
                 f"{year_1} et {year_2} :\n\n"
                 f"• {year_1} : {ca_1:,.2f} €\n"
                 f"• {year_2} : {ca_2:,.2f} €\n\n"
@@ -2383,14 +2427,14 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
             )
         else:
             return (
-                f"Comparaison du chiffre d’affaires {label_client} entre "
+                f"Comparaison du chiffre d’affaires {label_scope} entre "
                 f"{year_1} et {year_2} :\n\n"
                 f"• {year_1} : {ca_1:,.2f} €\n"
                 f"• {year_2} : {ca_2:,.2f} €\n\n"
                 f"Évolution : {evolution:+,.2f} € "
                 f"(pourcentage non calculable – CA initial nul)."
             )
-    
+
     
     # =================================================================================
     # CAS ANNEE PAR ANNEE
@@ -2670,7 +2714,6 @@ def clean_llm_text(text: str) -> str:
 #                           UTILISATION DU LLM DEPUIS SNOWFLAKE                                        #
 # ==================================================================================================== #
 
-
 def ask_llm(
     question: str,
     model: str = "llama3.1-8b",
@@ -2738,6 +2781,8 @@ def ask_llm(
 
     # --- Création du prompt final
     formatted_prompt = format_prompt(question, context, context_olga, context_olga_countries,context_equipement_client,context_olga_bu)
+
+
 
     # --- Initialisation session Cortex AI --- #
     session = init_session()
@@ -2821,4 +2866,5 @@ import markdown
 def markdown_to_html(md_text):
     """Convertit une chaîne Markdown en HTML"""
     return markdown.markdown(md_text)
+
 
