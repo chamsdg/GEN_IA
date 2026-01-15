@@ -612,6 +612,31 @@ def compute_olga_kpis(
 
     return result
 
+def is_olga_opportunity_intent(question: str) -> bool:
+    q = (question or "").lower()
+    keywords = [
+        "opportunité", "opportunites", "opportunités",
+        "pipeline", "pops", "conversion",
+        "lost", "perdu", "perdue", "perdues",
+        "olga"
+    ]
+    return any(k in q for k in keywords)
+
+"""
+def is_revenue_intent(question: str) -> bool:
+    q = (question or "").lower()
+    keywords = [
+        "ca", "chiffre d'affaires", "chiffre daffaires","ventes","vente",
+        "évolution des ventes", "évolution des vente", "ventes", "vente"
+        "facture", "facturé", "facturee", "facturation",
+        "revenu", "revenue",
+        "vente facturée", "ventes facturées"
+    ]
+    return any(k in q for k in keywords)
+"""
+
+
+
 # ======================================================================================================= #
 #                                        1.1 OLGA & CLIENTS                                              #
 # ====================================================================================================== #
@@ -620,30 +645,46 @@ def generate_olga(final: pd.DataFrame, question: str = "") -> str:
     Génère un résumé vertical des opportunités OLGA pour un ou plusieurs clients.
     Basé sur le dernier mois disponible.
     Évolution mensuelle affichée uniquement si explicitement demandée.
+
+    IMPORTANT:
+    - Si la question porte sur le CA / facturation => OLGA NE DOIT PAS répondre.
+    - OLGA répond uniquement si l’intention "opportunités" est détectée.
     """
 
-    if final.empty:
+    # 1) Priorité CA : on coupe OLGA
+    if is_revenue_intent(question):
+        return ""
+
+    # 2) Si la question ne parle pas d'opportunités -> OLGA ne répond pas
+    if not is_olga_opportunity_intent(question):
+        return ""
+
+    if final is None or final.empty:
         return "Aucune donnée d'opportunité disponible."
 
     df = final.copy()
 
     # Normalisation
+    if "RAISON_SOCIALE" not in df.columns:
+        return "Aucune donnée d'opportunité disponible (colonne RAISON_SOCIALE manquante)."
+
     df["client_clean"] = df["RAISON_SOCIALE"].astype(str).str.lower().str.strip()
 
     client_list = df["client_clean"].dropna().unique().tolist()
     clients_mentionnes = find_clients_in_question(question, client_list)
     clients_mentionnes = [c.lower().strip() for c in clients_mentionnes]
 
-    show_monthly = any(
-        word in question.lower()
-        for word in ["mois", "mensuel", "mensuelle","évolution","evolution", "tendance",
-                     "dans le temps", "par mois", "timeline","progression""historique"]
+    # 3) Mensuel OLGA UNIQUEMENT si intention opportunité + mots temporels
+    q_lower = (question or "").lower()
+    show_monthly = (
+        is_olga_opportunity_intent(question)
+        and any(word in q_lower for word in [
+            "mois", "mensuel", "mensuelle",
+            "tendance", "dans le temps",
+            "par mois", "timeline",
+            "progression", "historique"
+        ])
     )
-
-    
-
-    
-    
 
     summary_lines = []
 
@@ -655,7 +696,7 @@ def generate_olga(final: pd.DataFrame, question: str = "") -> str:
             df=df,
             dim_col="client_clean",
             dim_values=df["client_clean"].unique().tolist(),
-            include_monthly=False
+            include_monthly=False  # global : dernier mois uniquement
         )
 
         if not result:
@@ -665,15 +706,17 @@ def generate_olga(final: pd.DataFrame, question: str = "") -> str:
 
         summary_lines.append("KPI Opportunités Global (dernier mois)")
         summary_lines.append(f"POPS: {k['pops']:.2f} %")
-        summary_lines.append(f"Total Opportunite: {k['total_opportunity']:,.0f} $")
-        summary_lines.append(f"Total Ventes: {k['total_sales']:,.0f} $")
-        summary_lines.append(f"Lost Opportunite: {k['lost_opportunity']:,.0f} $")
+        summary_lines.append(f"Total Opportunité: {k['total_opportunity']:,.0f} $")
+        summary_lines.append(f"Ventes (opportunités OLGA): {k['total_sales']:,.0f} $")
+        summary_lines.append(f"Lost Opportunité: {k['lost_opportunity']:,.0f} $")
 
         return "\n".join(summary_lines)
 
     # =========================
     # CAS CLIENT(S)
     # =========================
+    last_result = None
+
     for client in clients_mentionnes:
         result = compute_olga_kpis(
             df=df,
@@ -686,89 +729,83 @@ def generate_olga(final: pd.DataFrame, question: str = "") -> str:
             summary_lines.append(f"- {client.title()} : non trouvé dans les données")
             continue
 
-        k = result["kpis"]
-        last_month = result["last_month"]
+        last_result = result  # on garde le dernier pour l'analyse portefeuille
 
-        summary_lines.append(
-            f"KPI Opportunites pour {client.title()} (dernier mois)"
-        )
+        k = result["kpis"]
+        last_month = result.get("last_month")
+
+        summary_lines.append(f"KPI Opportunités pour {client.title()} (dernier mois)")
         summary_lines.append(f"POPS: {k['pops']:.2f} %")
-        summary_lines.append(f"Total Opportunite: {k['total_opportunity']:,.0f} $")
-        summary_lines.append(f"Total Ventes: {k['total_sales']:,.0f} $")
-        summary_lines.append(f"Lost Opportunite: {k['lost_opportunity']:,.0f} $")
+        summary_lines.append(f"Total Opportunité: {k['total_opportunity']:,.0f} $")
+        summary_lines.append(f"Ventes (opportunités OLGA): {k['total_sales']:,.0f} $")
+        summary_lines.append(f"Lost Opportunité: {k['lost_opportunity']:,.0f} $")
 
         # Évolution mensuelle (si demandée)
-        if show_monthly and "monthly" in result:
+        if show_monthly and "monthly" in result and result["monthly"]:
             summary_lines.append("\nÉvolution mensuelle :")
             for row in result["monthly"]:
                 summary_lines.append(
                     f"{row['ANNEE_MOIS']} - "
                     f"POPS: {row['pops']:.2f} %, "
-                    f"Total Opportunite: {row['total_opportunity']:,.0f} $, "
-                    f"Ventes: {row['total_sales']:,.0f} $, "
+                    f"Total Opportunité: {row['total_opportunity']:,.0f} $, "
+                    f"Ventes (opportunités OLGA): {row['total_sales']:,.0f} $, "
                     f"Lost: {row['lost_opportunity']:,.0f} $"
                 )
 
+    # Si aucun client n'a retourné de résultat valide, on sort
+    if last_result is None:
+        return "\n".join(summary_lines) if summary_lines else "Aucune donnée d'opportunité disponible."
 
     # =========================
-    # ANALYSE PORTEFEUILLE CLIENTS
+    # ANALYSE PORTEFEUILLE CLIENTS (dernier mois)
     # =========================
-    df_last = df[df["ANNEE_MOIS"] == result["last_month"]]
-    
-    client_stats = (
-        df_last
-        .groupby("client_clean")
-        .agg(
-            total_opportunity=("TOTAL_OPPORTUNITE", "sum"),
-            total_sales=("TOTAL_VENTES", "sum"),
-            lost_opportunity=("LOST_OPPORTUNITE", "sum"),
-            client_name=("RAISON_SOCIALE", "first")
-        )
-        .reset_index()
-    )
-    
-    client_stats["pops"] = (
-        client_stats["total_sales"] /
-        client_stats["total_opportunity"].replace(0, pd.NA)
-    ) * 100
-    
-    summary_lines.append("")
-    summary_lines.append("Analyse du portefeuille d’opportunités")
-    
-    # Client avec le plus gros pipeline
-    top_pipeline = client_stats.sort_values(
-        "total_opportunity", ascending=False
-    ).iloc[0]
-    
-    summary_lines.append(
-        f"Client avec le plus gros pipeline : "
-        f"{top_pipeline['client_name']} "
-        f"({top_pipeline['total_opportunity']:,.0f} $)"
-    )
-    
-    # Meilleure conversion
-    best_conversion = client_stats.dropna().sort_values(
-        "pops", ascending=False
-    ).iloc[0]
-    
-    summary_lines.append(
-        f"Meilleure conversion d’opportunités : "
-        f"{best_conversion['client_name']} "
-        f"(POPS {best_conversion['pops']:.1f} %)"
-    )
-    
-    # Client à risque (lost élevé)
-    top_lost = client_stats.sort_values(
-        "lost_opportunity", ascending=False
-    ).iloc[0]
-    
-    summary_lines.append(
-        f"Client avec le plus d’opportunités perdues : "
-        f"{top_lost['client_name']} "
-        f"({top_lost['lost_opportunity']:,.0f} $)"
-    )
-    
+    if "ANNEE_MOIS" in df.columns and last_result.get("last_month") is not None:
+        df_last = df[df["ANNEE_MOIS"] == last_result["last_month"]].copy()
 
+        if not df_last.empty:
+            client_stats = (
+                df_last
+                .groupby("client_clean")
+                .agg(
+                    total_opportunity=("TOTAL_OPPORTUNITE", "sum"),
+                    total_sales=("TOTAL_VENTES", "sum"),
+                    lost_opportunity=("LOST_OPPORTUNITE", "sum"),
+                    client_name=("RAISON_SOCIALE", "first")
+                )
+                .reset_index()
+            )
+
+            client_stats["pops"] = (
+                client_stats["total_sales"] /
+                client_stats["total_opportunity"].replace(0, pd.NA)
+            ) * 100
+
+            summary_lines.append("")
+            summary_lines.append("Analyse du portefeuille d’opportunités")
+
+            # Client avec le plus gros pipeline
+            top_pipeline = client_stats.sort_values("total_opportunity", ascending=False).iloc[0]
+            summary_lines.append(
+                f"Client avec le plus gros pipeline : "
+                f"{top_pipeline['client_name']} "
+                f"({top_pipeline['total_opportunity']:,.0f} $)"
+            )
+
+            # Meilleure conversion
+            best_conversion = client_stats.dropna(subset=["pops"]).sort_values("pops", ascending=False).iloc[0]
+            summary_lines.append(
+                f"Meilleure conversion d’opportunités : "
+                f"{best_conversion['client_name']} "
+                f"(POPS {best_conversion['pops']:.1f} %)"
+            )
+
+            # Client à risque (lost élevé)
+            top_lost = client_stats.sort_values("lost_opportunity", ascending=False).iloc[0]
+            summary_lines.append(
+                f"Client avec le plus d’opportunités perdues : "
+                f"{top_lost['client_name']} "
+                f"({top_lost['lost_opportunity']:,.0f} $)"
+            )
 
     return "\n".join(summary_lines)
 
@@ -2254,6 +2291,224 @@ def extract_years_from_question(question: str) -> list[int]:
     return sorted(set(map(int, years)))
 
 
+def build_ca_by_month(
+    df: pd.DataFrame,
+    include_ytd_label: bool = False,   # optionnel si tu veux marquer l'année en cours
+) -> str:
+    if df.empty or "date_facture_dt" not in df.columns:
+        return "Aucune donnée temporelle disponible pour une analyse mensuelle.\n"
+
+    # On garde seulement les dates valides
+    df = df.dropna(subset=["date_facture_dt"]).copy()
+    if df.empty:
+        return "Aucune donnée disponible pour une analyse mensuelle.\n"
+
+    # Période mensuelle
+    df["ANNEE_MOIS"] = df["date_facture_dt"].dt.to_period("M").dt.to_timestamp()
+
+    monthly = (
+        df.groupby("ANNEE_MOIS", as_index=False)
+          .agg(CA=("GFD_MONTANT_VENTE_EUROS", "sum"))
+          .sort_values("ANNEE_MOIS")
+    )
+
+    if monthly.empty:
+        return "Aucune donnée disponible pour une analyse mensuelle.\n"
+
+    # Evolution vs mois précédent
+    monthly["Evol (€)"] = monthly["CA"].diff()
+    monthly["Evol (%)"] = monthly["CA"].pct_change() * 100
+
+    # Formatage table markdown
+    table = "### Chiffre d’affaires par mois\n\n"
+    table += "| Mois | CA (€) | Évolution (€) | Évolution (%) |\n"
+    table += "|------|--------|--------------:|--------------:|\n"
+
+    for _, row in monthly.iterrows():
+        mois = pd.to_datetime(row["ANNEE_MOIS"]).strftime("%Y-%m")
+        ca = row["CA"]
+
+        evol_eur = row["Evol (€)"]
+        evol_pct = row["Evol (%)"]
+
+        evol_eur_str = "" if pd.isna(evol_eur) else f"{evol_eur:+,.2f} €"
+        evol_pct_str = "" if pd.isna(evol_pct) else f"{evol_pct:+.1f} %"
+
+        table += f"| {mois} | {ca:,.2f} € | {evol_eur_str} | {evol_pct_str} |\n"
+
+    # (Option) rappel total
+    total = monthly["CA"].sum()
+    table += f"\n**Total période : {total:,.2f} €**\n"
+
+    return table
+
+
+
+def render_monthly_ca_table(monthly: pd.DataFrame) -> str:
+    if monthly is None or monthly.empty or "ANNEE_MOIS" not in monthly.columns:
+        return "Aucune donnée disponible pour une analyse mensuelle.\n"
+
+    monthly = monthly.copy().sort_values("ANNEE_MOIS")
+
+    # standardise colonne CA
+    if "CA" not in monthly.columns:
+        if "total_sales" in monthly.columns:
+            monthly["CA"] = monthly["total_sales"]
+        else:
+            return "Aucune donnée disponible pour une analyse mensuelle.\n"
+
+    # Evolution MoM
+    monthly["Evol (€)"] = monthly["CA"].diff()
+    monthly["Evol (%)"] = monthly["CA"].pct_change() * 100
+
+    table = "### Chiffre d’affaires par mois\n\n"
+    table += "| Mois | CA (€) | Évolution (€) | Évolution (%) |\n"
+    table += "|------|--------|--------------:|--------------:|\n"
+
+    for _, row in monthly.iterrows():
+        mois = pd.to_datetime(row["ANNEE_MOIS"]).strftime("%Y-%m")
+        ca = row["CA"]
+
+        evol_eur = row["Evol (€)"]
+        evol_pct = row["Evol (%)"]
+
+        evol_eur_str = "" if pd.isna(evol_eur) else f"{evol_eur:+,.2f} €"
+        evol_pct_str = "" if pd.isna(evol_pct) else f"{evol_pct:+.1f} %"
+
+        table += f"| {mois} | {ca:,.2f} € | {evol_eur_str} | {evol_pct_str} |\n"
+
+    table += f"\n**Total période : {monthly['CA'].sum():,.2f} €**\n"
+    return table
+
+    
+def build_monthly_sales(
+    df: pd.DataFrame,
+    group_by_client: bool = False
+) -> pd.DataFrame:
+
+    if df.empty or "DATE_FACTURE" not in df.columns:
+        return pd.DataFrame()
+
+    df = df.copy()
+
+    # 🔹 Conversion UNIQUE et fiable de la date
+    df["date_facture_dt"] = pd.to_datetime(
+        df["DATE_FACTURE"],
+        errors="coerce"
+    )
+
+    df = df.dropna(subset=["date_facture_dt"])
+
+    # 🔹 Groupement mensuel (Period)
+    df["ANNEE_MOIS"] = df["date_facture_dt"].dt.to_period("M")
+
+    group_cols = ["ANNEE_MOIS"]
+    if group_by_client and "RAISON_SOCIALE" in df.columns:
+        group_cols.append("RAISON_SOCIALE")
+
+    monthly = (
+        df
+        .groupby(group_cols, as_index=False)
+        .agg(
+            total_sales=("GFD_MONTANT_VENTE_EUROS", "sum")
+        )
+    )
+
+    # 🔹 CONVERSION CRUCIALE POUR PLOTLY
+    monthly["ANNEE_MOIS"] = monthly["ANNEE_MOIS"].dt.to_timestamp()
+    monthly = monthly.sort_values("ANNEE_MOIS")
+
+    return monthly
+
+import re
+from datetime import datetime
+
+MONTHS_FR = {
+    "janvier": 1,
+    "février": 2, "fevrier": 2,
+    "mars": 3,
+    "avril": 4,
+    "mai": 5,
+    "juin": 6,
+    "juillet": 7,
+    "août": 8, "aout": 8,
+    "septembre": 9,
+    "octobre": 10,
+    "novembre": 11,
+    "décembre": 12, "decembre": 12
+}
+
+def extract_month_from_question(question: str) -> int | None:
+    q = (question or "").lower()
+    # match mot entier (évite "mars" dans autre chose)
+    for name, m in MONTHS_FR.items():
+        if re.search(rf"\b{re.escape(name)}\b", q):
+            return m
+    return None
+
+def extract_year_from_question(question: str) -> int | None:
+    match = re.search(r"\b(20\d{2})\b", question or "")
+    return int(match.group(1)) if match else None
+
+def is_month_specific_request(question: str) -> bool:
+    q = (question or "").lower()
+    # On veut un mois explicite + une formulation de type "au mois de", "en mars", etc.
+    has_month = extract_month_from_question(q) is not None
+    return has_month and any(k in q for k in ["au mois", "mois de", "en "])
+
+
+import re
+
+
+
+def is_revenue_intent(question: str) -> bool:
+    q = (question or "").lower()
+
+    # si OLGA est mentionné -> pas du CA facturé
+    if any(w in q for w in ["opportunité", "opportunites", "opportunités", "pipeline", "pops", "olga", "lost"]):
+        return False
+
+    # CA explicite
+    if re.search(r"\bca\b", q):
+        return True
+
+    if any(k in q for k in [
+        "chiffre d'affaires", "chiffre daffaires",
+        "facture", "facturé", "facturee", "facturation",
+        "revenu", "revenue",
+        "ventes facturées", "vente facturée"
+    ]):
+        return True
+
+    # ventes => CA seulement si contexte temps/analyse
+    has_sales = re.search(r"\bventes?\b", q) is not None
+    has_context = (
+        any(k in q for k in ["par mois", "mensuel", "mensuelle", "mois", "évolution", "evolution", "historique", "tendance"])
+        or re.search(r"\b20\d{2}\b", q) is not None
+    )
+    return bool(has_sales and has_context)
+
+
+
+def is_monthly_analysis(question: str) -> bool:
+    q = (question or "").lower()
+    if any(k in q for k in [
+        "par mois", "mois par mois",
+        "mensuel", "mensuelle", "mensuellement",
+        "évolution mensuelle", "evolution mensuelle",
+        "historique mensuel",
+        "évolution des ventes", "evolution des ventes",
+        "vente par mois", "ventes par mois",
+        "au mois", "mois de"
+    ]):
+        return True
+    return bool(re.search(r"\bévolution\b", q) and re.search(r"\bmois\b", q))
+
+def is_comparison_intent(question: str) -> bool:
+    q = (question or "").lower()
+    return any(w in q for w in ["compare", "comparaison", "vs", "versus"])
+
+    
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
     # NORMALISATION DE BASE
@@ -2283,8 +2538,6 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     )
 
     
-
-
 
     # =================================================================================
     # DATES DE RÉFÉRENCE
@@ -2329,174 +2582,183 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
         fact["service_clean"].dropna().unique().tolist()
     )
 
+
     # =================================================================================
-    # CAS ANNEE PAR ANNEE - CLIENT
+    # CAS COMPARAISON CA MENSUEL ENTRE DEUX CLIENTS
+    # ex: "compare le CA de la SNIM vs Fekola SA par mois en 2025"
     # =================================================================================
     # =================================================================================
-    # CAS COMPARAISON DE DEUX ANNEES
+    # CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX CLIENTS
+    # ex: "compare le CA de la SNIM vs Fekola en 2025"
+    # ex: "compare le CA de la SNIM vs Fekola" (=> YTD année courante)
     # =================================================================================
-    #years_requested = extract_years_from_question(question)
+    if (
+        is_comparison_intent(question)
+        and is_revenue_intent(question)
+        and len(clients_mentionnes) == 2
+        and not is_monthly_analysis(question)   # IMPORTANT: pas "par mois"
+        and any(w in question_lower for w in ["compare", "comparaison", "vs", "versus"])
+    ):
+        client_a, client_b = clients_mentionnes[0], clients_mentionnes[1]
     
- 
-    years_requested = extract_years_from_question(question)
+        years_requested = extract_years_from_question(question)
+        year_target = years_requested[0] if len(years_requested) == 1 else None
     
-    if years_requested and len(years_requested) == 2:
-        year_1, year_2 = sorted(years_requested)
+        df_target = fact.copy()
     
-        # Filtrage par années
-        df_compare = fact[
-            fact["date_facture_dt"].dt.year.isin([year_1, year_2])
-        ]
+        # filtre clients
+        df_target = df_target[df_target["client_clean"].isin([client_a, client_b])]
     
-        # Filtrage par client
-        if clients_mentionnes:
-            df_compare = df_compare[
-                df_compare["client_clean"].isin(clients_mentionnes)
+        # ✅ si année non précisée => YTD année courante
+        if year_target is None:
+            df_target = df_target[
+                (df_target["date_facture_dt"] >= start_of_year) &
+                (df_target["date_facture_dt"] <= today)
             ]
+            period_label = (
+                f"YTD {current_year} (du {start_of_year.strftime('%Y-%m-%d')} "
+                f"au {today.strftime('%Y-%m-%d')})"
+            )
+        else:
+            df_target = df_target[df_target["date_facture_dt"].dt.year == year_target]
+            period_label = f"{year_target}"
     
-        # Filtrage par pays
-        if pays_mentionnes:
-            df_compare = df_compare[
-                df_compare["pays_clean"].isin(pays_mentionnes)
-            ]
+        if df_target.empty:
+            return (
+                f"Aucune donnée de chiffre d’affaires disponible pour comparer "
+                f"{client_a.upper()} et {client_b.upper()} sur la période : {period_label}."
+            )
     
-        # Aucun résultat
-        if df_compare.empty:
-            if clients_mentionnes and pays_mentionnes:
-                return (
-                    f"Aucune donnée de chiffre d’affaires n’est disponible "
-                    f"pour {clients_mentionnes[0].upper()} "
-                    f"au {pays_mentionnes[0].upper()} "
-                    f"sur {year_1} et {year_2}."
-                )
-            elif clients_mentionnes:
-                return (
-                    f"Aucune donnée de chiffre d’affaires n’est disponible "
-                    f"pour {clients_mentionnes[0].upper()} "
-                    f"sur {year_1} et {year_2}."
-                )
-            elif pays_mentionnes:
-                return (
-                    f"Aucune donnée de chiffre d’affaires n’est disponible "
-                    f"pour le {pays_mentionnes[0].upper()} "
-                    f"sur {year_1} et {year_2}."
-                )
-            else:
-                return (
-                    f"Aucune donnée de chiffre d’affaires n’est disponible "
-                    f"pour les années {year_1} et {year_2}."
-                )
-    
-        # Calcul CA par année
-        ca_by_year = (
-            df_compare
-            .groupby(df_compare["date_facture_dt"].dt.year)
-            ["GFD_MONTANT_VENTE_EUROS"]
+        ca = (
+            df_target
+            .groupby("client_clean")["GFD_MONTANT_VENTE_EUROS"]
             .sum()
             .to_dict()
         )
     
-        ca_1 = ca_by_year.get(year_1, 0)
-        ca_2 = ca_by_year.get(year_2, 0)
+        ca_a = float(ca.get(client_a, 0.0))
+        ca_b = float(ca.get(client_b, 0.0))
+        diff = ca_a - ca_b
+        pct = (diff / ca_b * 100) if ca_b != 0 else None
     
-        evolution = ca_2 - ca_1
-        evolution_pct = (evolution / ca_1 * 100) if ca_1 != 0 else None
+        out = (
+            f"## Comparaison du chiffre d’affaires – {client_a.upper()} vs {client_b.upper()} – {period_label}\n\n"
+            f"| Client | CA (€) |\n"
+            f"|--------|-------:|\n"
+            f"| {client_a.upper()} | {ca_a:,.2f} € |\n"
+            f"| {client_b.upper()} | {ca_b:,.2f} € |\n"
+            f"\n**Écart : {diff:+,.2f} €**"
+        )
     
-        # Libellé périmètre
-        if clients_mentionnes and pays_mentionnes:
-            label_scope = (
-                f"avec {clients_mentionnes[0].upper()} "
-                f"au {pays_mentionnes[0].upper()}"
-            )
-        elif clients_mentionnes:
-            label_scope = f"avec {clients_mentionnes[0].upper()}"
-        elif pays_mentionnes:
-            label_scope = f"au {pays_mentionnes[0].upper()}"
+        if pct is not None:
+            out += f" (**{pct:+.1f} %**)"
         else:
-            label_scope = "au global"
+            out += " (pourcentage non calculable – CA de référence nul)"
     
-        # Réponse
-        if evolution_pct is not None:
+        return out
+
+
+    
+   
+
+
+    # =================================================================================
+    # CAS CA MENSUEL (FACTURES) : ex "donne le CA de la SNIM par mois en 2025"
+    # =================================================================================
+    if is_monthly_analysis(question) and is_revenue_intent(question):
+
+        # --- année demandée ---
+        years_requested = extract_years_from_question(question)
+        year_target = years_requested[0] if len(years_requested) == 1 else None
+    
+        # --- construction du TARGET ---
+        df_target = fact.copy()
+    
+        # Filtre client (SNIM)
+        if clients_mentionnes:
+            df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        # Filtre année (2025)
+        if year_target is not None:
+            df_target = df_target[
+                df_target["date_facture_dt"].dt.year == year_target
+            ]
+    
+        # --- sécurité ---
+        if df_target.empty:
             return (
-                f"Comparaison du chiffre d’affaires {label_scope} entre "
-                f"{year_1} et {year_2} :\n\n"
-                f"• {year_1} : {ca_1:,.2f} €\n"
-                f"• {year_2} : {ca_2:,.2f} €\n\n"
-                f"Évolution : {evolution:+,.2f} € "
-                f"({evolution_pct:+.1f} %)."
+                f"Aucune donnée de chiffre d’affaires n’est disponible "
+                f"pour {clients_mentionnes[0].upper()} en {year_target}."
+            )
+    
+        # --- APPEL CORRECT ---
+        monthly = build_monthly_sales(
+            df_target,
+            group_by_client=False
+        )
+    
+        # --- garde-fou anti-hallucination ---
+        if monthly.empty:
+            total = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
+            return (
+                f"Le chiffre d’affaires total de {clients_mentionnes[0].upper()} "
+                f"en {year_target} est de {total:,.2f} €.\n\n"
+                "⚠️ La ventilation mensuelle n’est pas disponible à partir "
+                "des données de facturation actuelles."
+            )
+    
+        # --- RENDU ---
+        return (
+            f"## Chiffre d’affaires mensuel – {clients_mentionnes[0].upper()} – {year_target}\n\n"
+            + render_monthly_ca_table(monthly)
+        )
+
+
+    # =================================================================================
+    # CAS CA SUR UN MOIS PRECIS (ex: "CA SNIM en mars 2024")
+    # =================================================================================
+    month_target = extract_month_from_question(question)
+    year_target = extract_year_from_question(question)
+    
+    # On déclenche si mois + année + intent CA
+    if month_target and year_target and is_revenue_intent(question):
+        df_target = fact.copy()
+    
+        # filtre client
+        if clients_mentionnes:
+            df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        # filtre année + mois
+        df_target = df_target[
+            (df_target["date_facture_dt"].dt.year == year_target) &
+            (df_target["date_facture_dt"].dt.month == month_target)
+        ]
+    
+        if df_target.empty:
+            if clients_mentionnes:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible pour "
+                    f"{clients_mentionnes[0].upper()} en {list(MONTHS_FR.keys())[month_target-1].title()} {year_target}."
+                )
+            return f"Aucune donnée de chiffre d’affaires n’est disponible pour {year_target}-{month_target:02d}."
+    
+        ca_month = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
+    
+        # libellé mois FR “propre”
+        month_name = [k for k,v in MONTHS_FR.items() if v == month_target and len(k) > 3][0]
+        month_name = month_name.replace("fevrier", "février").replace("decembre", "décembre").replace("aout","août")
+    
+        if clients_mentionnes:
+            return (
+                f"En **{month_name.title()} {year_target}**, le chiffre d’affaires réalisé avec "
+                f"**{clients_mentionnes[0].upper()}** est de **{ca_month:,.2f} €**."
             )
         else:
             return (
-                f"Comparaison du chiffre d’affaires {label_scope} entre "
-                f"{year_1} et {year_2} :\n\n"
-                f"• {year_1} : {ca_1:,.2f} €\n"
-                f"• {year_2} : {ca_2:,.2f} €\n\n"
-                f"Évolution : {evolution:+,.2f} € "
-                f"(pourcentage non calculable – CA initial nul)."
+                f"En **{month_name.title()} {year_target}**, le chiffre d’affaires total est de **{ca_month:,.2f} €**."
             )
 
     
-    # =================================================================================
-    # CAS ANNEE PAR ANNEE
-    # =================================================================================
-    year_requested = extract_year_from_question(question)
-    
-    if year_requested:
-        df_year = fact[fact["date_facture_dt"].dt.year == year_requested]
-    
-        if clients_mentionnes:
-            df_year = df_year[df_year["client_clean"].isin(clients_mentionnes)]
-    
-        if df_year.empty:
-            if clients_mentionnes:
-                return (
-                    f"Aucune donnée de chiffre d’affaires n’est disponible "
-                    f"pour {clients_mentionnes[0].upper()} en {year_requested}."
-                )
-            else:
-                return (
-                    f"Aucune donnée de chiffre d’affaires n’est disponible "
-                    f"pour l’année {year_requested}."
-                )
-    
-        ca_year = df_year["GFD_MONTANT_VENTE_EUROS"].sum()
-    
-        if clients_mentionnes:
-            return (
-                f"En {year_requested}, le chiffre d’affaires réalisé avec "
-                f"{clients_mentionnes[0].upper()} s’élève à "
-                f"{ca_year:,.2f} €."
-            )
-        else:
-            return (
-                f"En {year_requested}, le chiffre d’affaires total s’élève à "
-                f"{ca_year:,.2f} €."
-            )
-    
-    
-    # =================================================================================
-    # CAS ANALYSE ANNUELLE
-    # =================================================================================
-    is_yearly = is_yearly_analysis(question)
-    
-    if is_yearly:
-        current_year = today.year
-    
-        if clients_mentionnes:
-            df_target = fact[fact["client_clean"].isin(clients_mentionnes)]
-        else:
-            df_target = fact
-    
-        if yearly_analysis_allowed(df_target, current_year):
-            return build_ca_by_year(
-                df_target,
-                include_ytd_label=True
-            )
-        else:
-            return (
-                "Aucune année complète n’est disponible pour une "
-                "ventilation annuelle exploitable."
-            )
 
 
 
