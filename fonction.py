@@ -136,11 +136,13 @@ def format_prompt(question: str, context: str, context_olga: str,context_olga_co
         context_equipement_client=context_equipement_client,
         context_olga_bu=context_olga_bu
     )
-  
+
+
+
+
 # ================================================================================================== #
 #                FONCTION POUR TROUVER LES CLIENTS DANS LA QUESTION                                  #
 # ================================================================================================== #
-
 def find_clients_in_question(question: str, client_list: list, threshold: int = 80):
     
     #Cherche tous les clients mentionnés dans la question (tolère les noms incomplets).
@@ -174,6 +176,132 @@ def find_clients_in_question(question: str, client_list: list, threshold: int = 
             found_clients.append(client)
 
     return found_clients
+
+
+import re
+import unicodedata
+from rapidfuzz import fuzz
+
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s)
+        if not unicodedata.combining(c)
+    )
+
+def find_clients_in_question_v2(question: str, client_list: list, threshold: int = 80, max_clients: int = 3):
+    """
+    Trouve les clients mentionnés dans la question, y compris quand il y en a 2 (comparaison),
+    et évite les erreurs causées par des mots comme 'par mois', 'mensuel', etc.
+    """
+
+    if not question or not client_list:
+        return []
+
+    # 1) Normalisation question
+    q = question.lower().strip()
+    q = _strip_accents(q)
+    q = re.sub(r"[’'`]", " ", q)
+    q = re.sub(r"[^a-z0-9\s/+-]", " ", q)  # garde / + - utiles
+    q = re.sub(r"\s+", " ", q).strip()
+
+    # 2) Détection intention comparaison (permet de garder 2+ clients)
+    comparison_markers = [
+        " vs ", " versus ", " contre ", " vs.", " v ", " compar", " comparaison", " comparer",
+        "/", " et ", " & ", " - "
+    ]
+    wants_comparison = any(m in f" {q} " for m in comparison_markers)
+
+    # 3) Stopwords + mots de temps/fréquence (bruit fréquent)
+    stopwords = {
+        "donne", "moi", "le", "la", "les", "de", "des", "du", "d", "un", "une", "et", "ou",
+        "avec", "pour", "sur", "dans", "au", "aux", "ce", "cet", "cette", "ces",
+        "ca", "chiffre", "affaire", "affaires", "total", "totaux", "montant", "somme",
+        "rapport", "tableau", "liste", "compare", "comparaison", "comparer", "vs", "versus", "contre",
+        "par", "mois", "mensuel", "mensuelle", "mensuels", "mensuelles",
+        "jour", "jours", "quotidien", "hebdo", "hebdomadaire",
+        "trimestre", "trimestriel", "annee", "annuel", "annuelle", "semaine", "semaines",
+        "periode", "periode", "date", "dates",
+        "entre", "en", "a", "à"
+    }
+
+    # tokens "propres"
+    raw_tokens = re.findall(r"\b[a-z0-9]{2,}\b", q)
+    tokens = [t for t in raw_tokens if t not in stopwords]
+
+    if not tokens:
+        return []
+
+    # 4) Préparation clients normalisés
+    norm_clients = []
+    for c in client_list:
+        cn = _strip_accents(str(c).lower())
+        cn = re.sub(r"[’'`]", " ", cn)
+        cn = re.sub(r"[^a-z0-9\s]", " ", cn)
+        cn = re.sub(r"\s+", " ", cn).strip()
+        norm_clients.append((c, cn))
+
+    # 5) Génération de candidats (n-grammes) sur tokens filtrés
+    #   + on inclut aussi des bigrammes/trigrammes de la question brute quand il y a "vs" etc.
+    candidates = set()
+
+    def add_ngrams(tok_list, n_min=1, n_max=4):
+        L = len(tok_list)
+        for n in range(n_min, n_max + 1):
+            for i in range(0, L - n + 1):
+                candidates.add(" ".join(tok_list[i:i+n]))
+
+    add_ngrams(tokens, 1, 4)
+
+    # Bonus: si comparaison, on split autour des marqueurs et on ngram sur chaque morceau
+    if wants_comparison:
+        parts = re.split(r"\bvs\b|\bversus\b|\bcontre\b|/|&|\bet\b", q)
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            ptoks = [t for t in re.findall(r"\b[a-z0-9]{2,}\b", p) if t not in stopwords]
+            if ptoks:
+                add_ngrams(ptoks, 1, 4)
+
+    # 6) Scoring fuzzy
+    scored = []
+    for phrase in candidates:
+        if len(phrase) < 2:
+            continue
+        for original_client, norm_client in norm_clients:
+            score = fuzz.token_set_ratio(phrase, norm_client)
+            if score >= threshold:
+                # plus la phrase est longue, plus elle est "précise" -> léger bonus
+                bonus = min(5, 1.2 * max(0, len(phrase.split()) - 1))
+                scored.append((original_client, score + bonus, phrase))
+
+    if not scored:
+        return []
+
+    # 7) Tri, déduplication, et limitation
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    found = []
+    used_norm = set()
+    for client, sc, phrase in scored:
+        cn = _strip_accents(str(client).lower())
+        cn = re.sub(r"[^a-z0-9\s]", " ", cn)
+        cn = re.sub(r"\s+", " ", cn).strip()
+
+        if cn in used_norm:
+            continue
+
+        found.append(client)
+        used_norm.add(cn)
+
+        # si pas comparaison, souvent un seul client suffit
+        if not wants_comparison and len(found) >= 1:
+            break
+
+        if len(found) >= max_clients:
+            break
+
+    return found
 
 
 def strip_accents(text: str) -> str:
@@ -467,7 +595,7 @@ def generate_equipment_summary(equipement: pd.DataFrame, question: str = "") -> 
     )
 
     client_list = equipement["client_clean"].dropna().unique().tolist()
-    clients_mentionnes = find_clients_in_question(question, client_list)
+    clients_mentionnes = find_clients_in_question (question, client_list)
     clients_mentionnes = [c.lower().strip() for c in clients_mentionnes]
 
     
@@ -2220,208 +2348,7 @@ def analyze_client_count_section(
 # ====================================================================================================== #
 #                           ASSEMBLAGE VERSION FINAL
 # ====================================================================================================== #
-# -------------------------------------- CAS SPECIFIQUE CA PAR ANNEE ----------------------------
-def is_yearly_analysis(question: str) -> bool:
-    keywords = [
-        "par année",
-        "par an",
-        "annuel",
-        "année par année",
-        "historique annuel",
-        "par exercice"
-    ]
-    q = question.lower()
-    return any(k in q for k in keywords)
 
-def build_ca_by_year(
-    df,
-    filter_mask=None,
-    include_ytd_label=True
-):
-    df = df.copy()
-
-    if "date_facture_dt" not in df.columns:
-        return "Aucune donnée temporelle disponible pour une analyse annuelle.\n"
-
-    if filter_mask is not None:
-        df = df[filter_mask]
-
-    if df.empty:
-        return "Aucune donnée disponible pour une analyse annuelle.\n"
-
-    df["year"] = df["date_facture_dt"].dt.year
-
-    yearly = (
-        df.groupby("year")["GFD_MONTANT_VENTE_EUROS"]
-        .sum()
-        .sort_index()
-    )
-
-    table = "### Chiffre d’affaires par année\n\n"
-    table += "| Année | CA (€) |\n|-------|--------|\n"
-
-    current_year = datetime.now().year
-
-    for year, ca in yearly.items():
-        label = str(year)
-        if include_ytd_label and year == current_year:
-            label += " (YTD)"
-        table += f"| {label} | {ca:,.2f} € |\n"
-
-    return table
-
-    
-
-def yearly_analysis_allowed(df, current_year):
-    years = df["date_facture_dt"].dt.year.dropna().unique()
-    complete_years = [y for y in years if y < current_year]
-    return len(complete_years) >= 1
-
-
-
-
-def extract_year_from_question(question: str):
-    match = re.search(r"(20\d{2})", question)
-    return int(match.group(1)) if match else None
-
-
-def extract_years_from_question(question: str) -> list[int]:
-    import re
-    years = re.findall(r"\b(20\d{2})\b", question)
-    return sorted(set(map(int, years)))
-
-
-def build_ca_by_month(
-    df: pd.DataFrame,
-    include_ytd_label: bool = False,   # optionnel si tu veux marquer l'année en cours
-) -> str:
-    if df.empty or "date_facture_dt" not in df.columns:
-        return "Aucune donnée temporelle disponible pour une analyse mensuelle.\n"
-
-    # On garde seulement les dates valides
-    df = df.dropna(subset=["date_facture_dt"]).copy()
-    if df.empty:
-        return "Aucune donnée disponible pour une analyse mensuelle.\n"
-
-    # Période mensuelle
-    df["ANNEE_MOIS"] = df["date_facture_dt"].dt.to_period("M").dt.to_timestamp()
-
-    monthly = (
-        df.groupby("ANNEE_MOIS", as_index=False)
-          .agg(CA=("GFD_MONTANT_VENTE_EUROS", "sum"))
-          .sort_values("ANNEE_MOIS")
-    )
-
-    if monthly.empty:
-        return "Aucune donnée disponible pour une analyse mensuelle.\n"
-
-    # Evolution vs mois précédent
-    monthly["Evol (€)"] = monthly["CA"].diff()
-    monthly["Evol (%)"] = monthly["CA"].pct_change() * 100
-
-    # Formatage table markdown
-    table = "### Chiffre d’affaires par mois\n\n"
-    table += "| Mois | CA (€) | Évolution (€) | Évolution (%) |\n"
-    table += "|------|--------|--------------:|--------------:|\n"
-
-    for _, row in monthly.iterrows():
-        mois = pd.to_datetime(row["ANNEE_MOIS"]).strftime("%Y-%m")
-        ca = row["CA"]
-
-        evol_eur = row["Evol (€)"]
-        evol_pct = row["Evol (%)"]
-
-        evol_eur_str = "" if pd.isna(evol_eur) else f"{evol_eur:+,.2f} €"
-        evol_pct_str = "" if pd.isna(evol_pct) else f"{evol_pct:+.1f} %"
-
-        table += f"| {mois} | {ca:,.2f} € | {evol_eur_str} | {evol_pct_str} |\n"
-
-    # (Option) rappel total
-    total = monthly["CA"].sum()
-    table += f"\n**Total période : {total:,.2f} €**\n"
-
-    return table
-
-
-
-def render_monthly_ca_table(monthly: pd.DataFrame) -> str:
-    if monthly is None or monthly.empty or "ANNEE_MOIS" not in monthly.columns:
-        return "Aucune donnée disponible pour une analyse mensuelle.\n"
-
-    monthly = monthly.copy().sort_values("ANNEE_MOIS")
-
-    # standardise colonne CA
-    if "CA" not in monthly.columns:
-        if "total_sales" in monthly.columns:
-            monthly["CA"] = monthly["total_sales"]
-        else:
-            return "Aucune donnée disponible pour une analyse mensuelle.\n"
-
-    # Evolution MoM
-    monthly["Evol (€)"] = monthly["CA"].diff()
-    monthly["Evol (%)"] = monthly["CA"].pct_change() * 100
-
-    table = "### Chiffre d’affaires par mois\n\n"
-    table += "| Mois | CA (€) | Évolution (€) | Évolution (%) |\n"
-    table += "|------|--------|--------------:|--------------:|\n"
-
-    for _, row in monthly.iterrows():
-        mois = pd.to_datetime(row["ANNEE_MOIS"]).strftime("%Y-%m")
-        ca = row["CA"]
-
-        evol_eur = row["Evol (€)"]
-        evol_pct = row["Evol (%)"]
-
-        evol_eur_str = "" if pd.isna(evol_eur) else f"{evol_eur:+,.2f} €"
-        evol_pct_str = "" if pd.isna(evol_pct) else f"{evol_pct:+.1f} %"
-
-        table += f"| {mois} | {ca:,.2f} € | {evol_eur_str} | {evol_pct_str} |\n"
-
-    table += f"\n**Total période : {monthly['CA'].sum():,.2f} €**\n"
-    return table
-
-    
-def build_monthly_sales(
-    df: pd.DataFrame,
-    group_by_client: bool = False
-) -> pd.DataFrame:
-
-    if df.empty or "DATE_FACTURE" not in df.columns:
-        return pd.DataFrame()
-
-    df = df.copy()
-
-    # 🔹 Conversion UNIQUE et fiable de la date
-    df["date_facture_dt"] = pd.to_datetime(
-        df["DATE_FACTURE"],
-        errors="coerce"
-    )
-
-    df = df.dropna(subset=["date_facture_dt"])
-
-    # 🔹 Groupement mensuel (Period)
-    df["ANNEE_MOIS"] = df["date_facture_dt"].dt.to_period("M")
-
-    group_cols = ["ANNEE_MOIS"]
-    if group_by_client and "RAISON_SOCIALE" in df.columns:
-        group_cols.append("RAISON_SOCIALE")
-
-    monthly = (
-        df
-        .groupby(group_cols, as_index=False)
-        .agg(
-            total_sales=("GFD_MONTANT_VENTE_EUROS", "sum")
-        )
-    )
-
-    # 🔹 CONVERSION CRUCIALE POUR PLOTLY
-    monthly["ANNEE_MOIS"] = monthly["ANNEE_MOIS"].dt.to_timestamp()
-    monthly = monthly.sort_values("ANNEE_MOIS")
-
-    return monthly
-
-import re
-from datetime import datetime
 
 MONTHS_FR = {
     "janvier": 1,
@@ -2438,77 +2365,10 @@ MONTHS_FR = {
     "décembre": 12, "decembre": 12
 }
 
-def extract_month_from_question(question: str) -> int | None:
-    q = (question or "").lower()
-    # match mot entier (évite "mars" dans autre chose)
-    for name, m in MONTHS_FR.items():
-        if re.search(rf"\b{re.escape(name)}\b", q):
-            return m
-    return None
 
-def extract_year_from_question(question: str) -> int | None:
-    match = re.search(r"\b(20\d{2})\b", question or "")
-    return int(match.group(1)) if match else None
-
-def is_month_specific_request(question: str) -> bool:
-    q = (question or "").lower()
-    # On veut un mois explicite + une formulation de type "au mois de", "en mars", etc.
-    has_month = extract_month_from_question(q) is not None
-    return has_month and any(k in q for k in ["au mois", "mois de", "en "])
-
-
-import re
-
-
-
-def is_revenue_intent(question: str) -> bool:
-    q = (question or "").lower()
-
-    # si OLGA est mentionné -> pas du CA facturé
-    if any(w in q for w in ["opportunité", "opportunites", "opportunités", "pipeline", "pops", "olga", "lost"]):
-        return False
-
-    # CA explicite
-    if re.search(r"\bca\b", q):
-        return True
-
-    if any(k in q for k in [
-        "chiffre d'affaires", "chiffre daffaires",
-        "facture", "facturé", "facturee", "facturation",
-        "revenu", "revenue",
-        "ventes facturées", "vente facturée"
-    ]):
-        return True
-
-    # ventes => CA seulement si contexte temps/analyse
-    has_sales = re.search(r"\bventes?\b", q) is not None
-    has_context = (
-        any(k in q for k in ["par mois", "mensuel", "mensuelle", "mois", "évolution", "evolution", "historique", "tendance"])
-        or re.search(r"\b20\d{2}\b", q) is not None
-    )
-    return bool(has_sales and has_context)
-
-
-
-def is_monthly_analysis(question: str) -> bool:
-    q = (question or "").lower()
-    if any(k in q for k in [
-        "par mois", "mois par mois",
-        "mensuel", "mensuelle", "mensuellement",
-        "évolution mensuelle", "evolution mensuelle",
-        "historique mensuel",
-        "évolution des ventes", "evolution des ventes",
-        "vente par mois", "ventes par mois",
-        "au mois", "mois de"
-    ]):
-        return True
-    return bool(re.search(r"\bévolution\b", q) and re.search(r"\bmois\b", q))
-
-def is_comparison_intent(question: str) -> bool:
-    q = (question or "").lower()
-    return any(w in q for w in ["compare", "comparaison", "vs", "versus"])
 
     
+# -------------------------------------- CAS SPECIFIQUE CA PAR ANNEE ----------------------------
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
     # NORMALISATION DE BASE
@@ -2543,6 +2403,8 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # DATES DE RÉFÉRENCE
     # =================================================================================
     today = datetime.now()
+    
+    question_lower = question.lower()
 
     current_year = today.year
     last_year = current_year - 1
@@ -2554,18 +2416,19 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
     # =================================================================================
     # DÉTECTION DES ENTITÉS DANS LA QUESTION
-    # =================================================================================
-    question_lower = question.lower()
-
-    pays_mentionnes = find_countries_in_question(
+    # ================================================================================= 
+    pays_mentionnes = find_countries_in_question_v3(
         question_lower,
-        fact["pays_clean"].dropna().unique().tolist()
+        fact["pays_clean"].dropna().unique().tolist() #find_countries_in_question
     )
 
-    clients_mentionnes = find_clients_in_question(
+   
+
+    clients_mentionnes = find_clients_in_question_v3(
         question_lower,
-        fact["client_clean"].dropna().unique().tolist()
+        fact["client_clean"].dropna().unique().tolist() # find_clients_in_question
     )
+
 
     bu_mentionnees = find_bu_in_question(
         question_lower,
@@ -2583,33 +2446,389 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     )
 
 
+    
+
     # =================================================================================
-    # CAS COMPARAISON CA MENSUEL ENTRE DEUX CLIENTS
-    # ex: "compare le CA de la SNIM vs Fekola SA par mois en 2025"
+    # 0) Préparation (à faire une fois)
     # =================================================================================
+    q = question_lower  # alias court
+
+    pays_mentionnes = resolve_country_overlaps(q, pays_mentionnes)
+
+    clients_mentionnes = suppress_clients_when_country_query(q, clients_mentionnes, pays_mentionnes)
+
+     # 🔍 DEBUG ICI (OBLIGATOIRE)
+    with st.sidebar:
+        st.markdown("### DEBUG ROUTING")
+        st.write("q:", q)
+        st.write("is_comparison_intent:", is_comparison_intent(q))
+        st.write("is_revenue_intent:", is_revenue_intent(q))
+        st.write("is_monthly_analysis:", is_monthly_analysis(q))
+        st.write("clients_mentionnes:", clients_mentionnes)
+        st.write("len(clients_mentionnes):", len(clients_mentionnes))
+        st.write("pays_mentionnes:", pays_mentionnes)
+        st.write("len(pays_mentionnes):", len(pays_mentionnes))
+
+   
+
+
     # =================================================================================
-    # CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX CLIENTS
-    # ex: "compare le CA de la SNIM vs Fekola en 2025"
-    # ex: "compare le CA de la SNIM vs Fekola" (=> YTD année courante)
+    # 1bis) CAS CA SUR UN MOIS PRECIS (PAYS)
+    # ex: "donne le ca du Sénégal au mois de mars 2025"
+    # =================================================================================
+    month_target = extract_month_from_question(q)
+    year_target  = extract_year_from_question(q)
+    
+    if (
+        month_target and year_target
+        and is_revenue_intent(q)
+        and is_month_specific_request(q)
+        and not is_comparison_intent(q)
+        and pays_mentionnes
+    ):
+        df_target = fact.copy()
+    
+        # filtre pays
+        df_target = df_target[df_target["pays_clean"].isin(pays_mentionnes)]
+    
+        # ⚠️ IMPORTANT: ne PAS filtrer client ici par défaut (collision pays->clients)
+        # Si tu veux supporter "pays + client", active seulement avec intention client explicite:
+        # if clients_mentionnes and user_explicitly_mentions_client(q):
+        #     df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        df_target = df_target[
+            (df_target["date_facture_dt"].dt.year == year_target) &
+            (df_target["date_facture_dt"].dt.month == month_target)
+        ]
+    
+        if df_target.empty:
+            return (
+                f"Aucune donnée de chiffre d’affaires n’est disponible pour "
+                f"{pays_mentionnes[0].upper()} en {list(MONTHS_FR.keys())[month_target-1].title()} {year_target}."
+            )
+    
+        ca_month = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
+    
+        month_name = [k for k, v in MONTHS_FR.items() if v == month_target and len(k) >= 3][0]
+        month_name = (
+            month_name.replace("fevrier", "février")
+                      .replace("decembre", "décembre")
+                      .replace("aout", "août")
+        )
+    
+        return (
+            f"En **{month_name.title()} {year_target}**, le chiffre d’affaires réalisé pour "
+            f"**{pays_mentionnes[0].upper()}** est de **{ca_month:,.2f} €**."
+        )
+
+
+
+    # =================================================================================
+    # 1) CAS CA SUR UN MOIS PRECIS (ex: "donne le ca SNIM au mois de mars 2025")
+    # =================================================================================
+    month_target = extract_month_from_question(q)
+    year_target  = extract_year_from_question(q)
+    
+    if month_target and year_target and is_revenue_intent(q) and is_month_specific_request(q) and not is_comparison_intent(q):
+        df_target = fact.copy()
+    
+        if clients_mentionnes:
+            df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        df_target = df_target[
+            (df_target["date_facture_dt"].dt.year == year_target) &
+            (df_target["date_facture_dt"].dt.month == month_target)
+        ]
+    
+        if df_target.empty:
+            if clients_mentionnes:
+                return (
+                    f"Aucune donnée de chiffre d’affaires n’est disponible pour "
+                    f"{clients_mentionnes[0].upper()} en {list(MONTHS_FR.keys())[month_target-1].title()} {year_target}."
+                )
+            return f"Aucune donnée de chiffre d’affaires n’est disponible pour {year_target}-{month_target:02d}."
+    
+        ca_month = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
+    
+        #month_name = [k for k, v in MONTHS_FR.items() if v == month_target and len(k) > 3][0]
+        month_name = [k for k, v in MONTHS_FR.items() if v == month_target and len(k) >= 3][0]
+        month_name = month_name.replace("fevrier", "février").replace("decembre", "décembre").replace("aout", "août")
+    
+        if clients_mentionnes:
+            return (
+                f"En **{month_name.title()} {year_target}**, le chiffre d’affaires réalisé avec "
+                f"**{clients_mentionnes[0].upper()}** est de **{ca_month:,.2f} €**."
+            )
+        else:
+            return (
+                f"En **{month_name.title()} {year_target}**, le chiffre d’affaires total est de **{ca_month:,.2f} €**."
+            )
+
+
+
+    
+    # =================================================================================
+    # 2) CAS COMPARAISON CA MENSUEL ENTRE DEUX PAYS
+    # ex: "compare le CA du Sénégal vs Côte d'Ivoire par mois en 2025"
     # =================================================================================
     if (
-        is_comparison_intent(question)
-        and is_revenue_intent(question)
+        is_comparison_intent(q)
+        and is_revenue_intent(q)
+        and len(pays_mentionnes) == 2
+        and is_monthly_analysis(q)
+    ):
+        pays_a, pays_b = pays_mentionnes[0], pays_mentionnes[1]
+    
+       # years_requested = extract_years_from_question(q)
+
+        years_requested = extract_years_from_question(q)
+
+        # fallback si extract_years... rate l'année
+        if not years_requested:
+            import re
+            years_requested = [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", q)]
+        
+        # prendre la dernière année mentionnée si plusieurs
+        year_target = years_requested[-1] if years_requested else None
+
+        #year_target = years_requested[0] if len(years_requested) == 1 else None
+    
+        df_target = fact.copy()
+        df_target = df_target[df_target["pays_clean"].isin([pays_a, pays_b])]
+    
+        # Optionnel : si tu veux aussi supporter un filtre client en même temps
+        # Ne filtre par client QUE si l'utilisateur a vraiment demandé un client
+        if clients_mentionnes:
+            df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        if year_target is None:
+            df_target = df_target[
+                (df_target["date_facture_dt"] >= start_of_year) &
+                (df_target["date_facture_dt"] <= today)
+            ]
+            period_label = f"YTD {current_year}"
+        else:
+            df_target = df_target[df_target["date_facture_dt"].dt.year == year_target]
+            period_label = str(year_target)
+    
+        if df_target.empty:
+            return f"Aucune donnée pour {pays_a.upper()} vs {pays_b.upper()} sur {period_label}."
+    
+        df_target["year_month"] = df_target["date_facture_dt"].dt.to_period("M").astype(str)
+    
+        monthly = (
+            df_target
+            .groupby(["year_month", "pays_clean"])["GFD_MONTANT_VENTE_EUROS"]
+            .sum()
+            .reset_index()
+        )
+    
+        pivot = (
+            monthly
+            .pivot(index="year_month", columns="pays_clean", values="GFD_MONTANT_VENTE_EUROS")
+            .fillna(0.0)
+            .sort_index()
+        )
+    
+        return (
+            f"## Comparaison mensuelle du CA – {pays_a.upper()} vs {pays_b.upper()} – {period_label}\n\n"
+            + pivot.to_markdown(floatfmt=",.2f")
+        )
+
+
+    # =================================================================================
+    # 3) CAS COMPARAISON CA MENSUEL ENTRE DEUX CLIENTS
+    # =================================================================================
+    if (
+        is_comparison_intent(q)
+        and is_revenue_intent(q)
         and len(clients_mentionnes) == 2
-        and not is_monthly_analysis(question)   # IMPORTANT: pas "par mois"
-        and any(w in question_lower for w in ["compare", "comparaison", "vs", "versus"])
+        and is_monthly_analysis(q)
     ):
         client_a, client_b = clients_mentionnes[0], clients_mentionnes[1]
     
-        years_requested = extract_years_from_question(question)
+        years_requested = extract_years_from_question(q)
         year_target = years_requested[0] if len(years_requested) == 1 else None
     
         df_target = fact.copy()
-    
-        # filtre clients
         df_target = df_target[df_target["client_clean"].isin([client_a, client_b])]
     
-        # ✅ si année non précisée => YTD année courante
+        if year_target is None:
+            df_target = df_target[
+                (df_target["date_facture_dt"] >= start_of_year) &
+                (df_target["date_facture_dt"] <= today)
+            ]
+            period_label = f"YTD {current_year}"
+        else:
+            df_target = df_target[df_target["date_facture_dt"].dt.year == year_target]
+            period_label = str(year_target)
+    
+        if df_target.empty:
+            return f"Aucune donnée pour {client_a.upper()} vs {client_b.upper()} sur {period_label}."
+    
+        df_target["year_month"] = df_target["date_facture_dt"].dt.to_period("M").astype(str)
+    
+        monthly = (
+            df_target
+            .groupby(["year_month", "client_clean"])["GFD_MONTANT_VENTE_EUROS"]
+            .sum()
+            .reset_index()
+        )
+    
+        pivot = (
+            monthly
+            .pivot(index="year_month", columns="client_clean", values="GFD_MONTANT_VENTE_EUROS")
+            .fillna(0.0)
+            .sort_index()
+        )
+    
+        return (
+            f"## Comparaison mensuelle du CA – {client_a.upper()} vs {client_b.upper()} – {period_label}\n\n"
+            + pivot.to_markdown(floatfmt=",.2f")
+        )
+
+
+    # =================================================================================
+    # X) COMPARAISON YTD vs LYTD POUR 1 PAYS
+    # ex: "compare le CA du Sénégal cette année vs l'année dernière"
+    # =================================================================================
+    if (
+        is_comparison_intent(q)
+        and is_revenue_intent(q)
+        and len(pays_mentionnes) == 1
+        and not is_monthly_analysis(q)
+        #and ("cette annee" in q or "cette année" in q or "annee derniere" in q or "l'annee derniere" in q or "l’année dernière" in q)
+    ):
+        pays = pays_mentionnes[0]
+        df_pays = fact[fact["pays_clean"] == pays].copy()
+    
+        # YTD
+        ytd = df_pays.loc[
+            (df_pays["date_facture_dt"] >= start_of_year) &
+            (df_pays["date_facture_dt"] <= today),
+            "GFD_MONTANT_VENTE_EUROS"
+        ].sum()
+    
+        # LYTD (même fenêtre l'an dernier)
+        ly_start = start_of_last_year
+        ly_end = same_day_last_year
+    
+        lytd = df_pays.loc[
+            (df_pays["date_facture_dt"] >= ly_start) &
+            (df_pays["date_facture_dt"] <= ly_end),
+            "GFD_MONTANT_VENTE_EUROS"
+        ].sum()
+    
+        diff = ytd - lytd
+        pct = (diff / lytd * 100) if lytd != 0 else None
+    
+        out = (
+            f"## Comparaison CA – {pays.upper()} – YTD {current_year} vs LYTD {last_year}\n\n"
+            f"- **CA YTD {current_year}** (du {start_of_year:%Y-%m-%d} au {today:%Y-%m-%d}) : **{ytd:,.2f} €**\n"
+            f"- **CA LYTD {last_year}** (du {start_of_last_year:%Y-%m-%d} au {same_day_last_year:%Y-%m-%d}) : **{lytd:,.2f} €**\n"
+            f"- **Écart** : **{diff:+,.2f} €**"
+        )
+        out += f" (**{pct:+.1f} %**)" if pct is not None else " (pourcentage non calculable – CA de référence nul)"
+        return out
+
+
+    # =================================================================================
+    # 4) CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX PAYS
+    # ex: "compare le CA du Sénégal vs Côte d'Ivoire en 2025"
+    # =================================================================================
+    if (
+        is_comparison_intent(q)
+        and is_revenue_intent(q)
+        and len(pays_mentionnes) == 2
+        and not is_monthly_analysis(q)
+    ):
+        pays_a, pays_b = pays_mentionnes[0], pays_mentionnes[1]
+    
+        years_requested = extract_years_from_question(q)
+    
+        # fallback si extract_years... rate l'année
+        if not years_requested:
+            import re
+            years_requested = [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", q)]
+    
+        # prendre la dernière année mentionnée si plusieurs
+        year_target = years_requested[-1] if years_requested else None
+    
+        df_target = fact.copy()
+        df_target = df_target[df_target["pays_clean"].isin([pays_a, pays_b])]
+    
+        # ⚠️ Très important : ne filtre pas par client ici par défaut
+        # (sinon collisions "senegal" / "mali" dans des raisons sociales)
+        # Si tu veux supporter "pays vs pays pour client X", fais-le uniquement
+        # si tu as une intention client explicite.
+        # if clients_mentionnes and user_explicitly_mentions_client(q):
+        #     df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        if year_target is None:
+            df_target = df_target[
+                (df_target["date_facture_dt"] >= start_of_year) &
+                (df_target["date_facture_dt"] <= today)
+            ]
+            period_label = (
+                f"YTD {current_year} (du {start_of_year.strftime('%Y-%m-%d')} "
+                f"au {today.strftime('%Y-%m-%d')})"
+            )
+        else:
+            df_target = df_target[df_target["date_facture_dt"].dt.year == year_target]
+            period_label = f"{year_target}"
+    
+        if df_target.empty:
+            return (
+                f"Aucune donnée de chiffre d’affaires disponible pour comparer "
+                f"{pays_a.upper()} et {pays_b.upper()} sur la période : {period_label}."
+            )
+    
+        ca = (
+            df_target
+            .groupby("pays_clean")["GFD_MONTANT_VENTE_EUROS"]
+            .sum()
+            .to_dict()
+        )
+    
+        ca_a = float(ca.get(pays_a, 0.0))
+        ca_b = float(ca.get(pays_b, 0.0))
+        diff = ca_a - ca_b
+        pct = (diff / ca_b * 100) if ca_b != 0 else None
+    
+        out = (
+            f"## Comparaison du chiffre d’affaires – {pays_a.upper()} vs {pays_b.upper()} – {period_label}\n\n"
+            f"| Pays | CA (€) |\n"
+            f"|------|-------:|\n"
+            f"| {pays_a.upper()} | {ca_a:,.2f} € |\n"
+            f"| {pays_b.upper()} | {ca_b:,.2f} € |\n"
+            f"\n**Écart : {diff:+,.2f} €**"
+        )
+    
+        if pct is not None:
+            out += f" (**{pct:+.1f} %**)"
+        else:
+            out += " (pourcentage non calculable – CA de référence nul)"
+    
+        return out
+        
+    
+    # =================================================================================
+    # 5) CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX CLIENTS
+    # =================================================================================
+    if (
+        is_comparison_intent(q)
+        and is_revenue_intent(q)
+        and len(clients_mentionnes) == 2
+        and not is_monthly_analysis(q)
+    ):
+        client_a, client_b = clients_mentionnes[0], clients_mentionnes[1]
+    
+        years_requested = extract_years_from_question(q)
+        year_target = years_requested[0] if len(years_requested) == 1 else None
+    
+        df_target = fact.copy()
+        df_target = df_target[df_target["client_clean"].isin([client_a, client_b])]
+    
         if year_target is None:
             df_target = df_target[
                 (df_target["date_facture_dt"] >= start_of_year) &
@@ -2659,45 +2878,169 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
     
-   
-
 
     # =================================================================================
-    # CAS CA MENSUEL (FACTURES) : ex "donne le CA de la SNIM par mois en 2025"
+    #6)  CAS CA D’UN PAYS POUR UNE ANNÉE PRÉCISE
+    # ex: "donne le CA du Sénégal en 2025"
     # =================================================================================
-    if is_monthly_analysis(question) and is_revenue_intent(question):
-
-        # --- année demandée ---
-        years_requested = extract_years_from_question(question)
-        year_target = years_requested[0] if len(years_requested) == 1 else None
+    if (
+        is_revenue_intent(q)
+        and not is_comparison_intent(q)
+        and not is_monthly_analysis(q)
+        and pays_mentionnes
+        and extract_year_from_question(q) is not None
+    ):
+        pays = pays_mentionnes[0]
+        year_target = extract_year_from_question(q)
     
-        # --- construction du TARGET ---
+        df_target = fact.copy()
+        df_target = df_target[
+            (df_target["pays_clean"] == pays)
+            & (df_target["date_facture_dt"].dt.year == year_target)
+        ]
+    
+        if df_target.empty:
+            return (
+                f"Aucune donnée de chiffre d’affaires disponible pour "
+                f"{pays.upper()} en {year_target}."
+            )
+    
+        ca_total = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
+    
+        return (
+            f"## Chiffre d’affaires – {pays.upper()} – {year_target}\n\n"
+            f"- **CA total** : {ca_total:,.2f} €\n"
+            f"- **Période analysée** : année complète {year_target}\n"
+        )
+
+
+    # =================================================================================
+    # 7) CA PAR ANNÉE (PAYS si mentionné, sinon GLOBAL)
+    # =================================================================================
+    if is_yearly_analysis(q) and is_revenue_intent(q) and pays_mentionnes and not is_comparison_intent(q):
+        years_requested = extract_years_from_question(q)
         df_target = fact.copy()
     
-        # Filtre client (SNIM)
+        df_target = df_target[df_target["pays_clean"].isin(pays_mentionnes)]
+    
+        # ✅ important: ne PAS filtrer client ici si un pays est présent
+        # (sinon collision "senegal" -> clients)
+        # if clients_mentionnes:
+        #     df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        if years_requested:
+            df_target = df_target[df_target["date_facture_dt"].dt.year.isin(years_requested)]
+    
+        if df_target.empty:
+            return f"Aucune donnée de chiffre d’affaires disponible pour {pays_mentionnes[0].upper()}."
+    
+        return (
+            f"## Chiffre d’affaires par année – {pays_mentionnes[0].upper()}\n\n"
+            + build_ca_by_year(df_target, include_ytd_label=True)
+        )
+
+
+
+    # =================================================================================
+    # 8) CAS CA PAR ANNÉE (CLIENT)
+    # =================================================================================
+    if (
+        is_yearly_analysis(q)
+        and is_revenue_intent(q)
+        and not is_comparison_intent(q)
+        and clients_mentionnes
+        and not pays_mentionnes
+    ):
+        years_requested = extract_years_from_question(q)
+        df_target = fact.copy()
+    
+        df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+    
+        if years_requested:
+            df_target = df_target[df_target["date_facture_dt"].dt.year.isin(years_requested)]
+    
+        if df_target.empty:
+            return f"Aucune donnée de chiffre d’affaires disponible pour {clients_mentionnes[0].upper()}."
+    
+        return (
+            f"## Chiffre d’affaires par année – {clients_mentionnes[0].upper()}\n\n"
+            + build_ca_by_year(df_target, include_ytd_label=True)
+        )
+
+
+     
+
+    # =================================================================================
+    # 9) CAS CA MENSUEL (FACTURES) - PAYS : ex "donne le CA du Sénégal par mois en 2025"
+    # =================================================================================
+    if is_monthly_analysis(q) and is_revenue_intent(q) and pays_mentionnes and not is_month_specific_request(q) and not is_comparison_intent(q):
+        years_requested = extract_years_from_question(q)
+        year_target = years_requested[0] if len(years_requested) == 1 else None
+    
+        df_target = fact.copy()
+    
+        # filtre pays
+        if pays_mentionnes:
+            df_target = df_target[df_target["pays_clean"].isin(pays_mentionnes)]
+    
+        # optionnel : si la question mentionne aussi un client
+        if clients_mentionnes:
+          df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
+
+            
+        # filtre année
+        if year_target is not None:
+            df_target = df_target[df_target["date_facture_dt"].dt.year == year_target]
+    
+        if df_target.empty:
+            # message cohérent avec le bloc client
+            return (
+                f"Aucune donnée de chiffre d’affaires n’est disponible "
+                f"pour {pays_mentionnes[0].upper()} en {year_target}."
+            )
+    
+        # IMPORTANT :
+        # build_monthly_sales doit pouvoir grouper par mois uniquement (group_by_client=False)
+        monthly = build_monthly_sales(df_target, group_by_client=False)
+    
+        if monthly.empty:
+            total = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
+            return (
+                f"Le chiffre d’affaires total de {pays_mentionnes[0].upper()} "
+                f"en {year_target} est de {total:,.2f} €.\n\n"
+                "⚠️ La ventilation mensuelle n’est pas disponible à partir "
+                "des données de facturation actuelles."
+            )
+    
+        return (
+            f"## Chiffre d’affaires mensuel – {pays_mentionnes[0].upper()} – {year_target}\n\n"
+            + render_monthly_ca_table(monthly)
+        )
+
+    
+    # =================================================================================
+    # 10) CAS CA MENSUEL CLIENT : ex "donne le CA de la SNIM par mois en 2025"
+    # =================================================================================
+    if is_monthly_analysis(q) and is_revenue_intent(q) and clients_mentionnes and not is_month_specific_request(q):
+        years_requested = extract_years_from_question(q)
+        year_target = years_requested[0] if len(years_requested) == 1 else None
+    
+        df_target = fact.copy()
+    
         if clients_mentionnes:
             df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
     
-        # Filtre année (2025)
         if year_target is not None:
-            df_target = df_target[
-                df_target["date_facture_dt"].dt.year == year_target
-            ]
+            df_target = df_target[df_target["date_facture_dt"].dt.year == year_target]
     
-        # --- sécurité ---
         if df_target.empty:
             return (
                 f"Aucune donnée de chiffre d’affaires n’est disponible "
                 f"pour {clients_mentionnes[0].upper()} en {year_target}."
             )
     
-        # --- APPEL CORRECT ---
-        monthly = build_monthly_sales(
-            df_target,
-            group_by_client=False
-        )
+        monthly = build_monthly_sales(df_target, group_by_client=False)
     
-        # --- garde-fou anti-hallucination ---
         if monthly.empty:
             total = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
             return (
@@ -2707,61 +3050,14 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
                 "des données de facturation actuelles."
             )
     
-        # --- RENDU ---
         return (
             f"## Chiffre d’affaires mensuel – {clients_mentionnes[0].upper()} – {year_target}\n\n"
             + render_monthly_ca_table(monthly)
         )
-
-
-    # =================================================================================
-    # CAS CA SUR UN MOIS PRECIS (ex: "CA SNIM en mars 2024")
-    # =================================================================================
-    month_target = extract_month_from_question(question)
-    year_target = extract_year_from_question(question)
-    
-    # On déclenche si mois + année + intent CA
-    if month_target and year_target and is_revenue_intent(question):
-        df_target = fact.copy()
-    
-        # filtre client
-        if clients_mentionnes:
-            df_target = df_target[df_target["client_clean"].isin(clients_mentionnes)]
-    
-        # filtre année + mois
-        df_target = df_target[
-            (df_target["date_facture_dt"].dt.year == year_target) &
-            (df_target["date_facture_dt"].dt.month == month_target)
-        ]
-    
-        if df_target.empty:
-            if clients_mentionnes:
-                return (
-                    f"Aucune donnée de chiffre d’affaires n’est disponible pour "
-                    f"{clients_mentionnes[0].upper()} en {list(MONTHS_FR.keys())[month_target-1].title()} {year_target}."
-                )
-            return f"Aucune donnée de chiffre d’affaires n’est disponible pour {year_target}-{month_target:02d}."
-    
-        ca_month = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
-    
-        # libellé mois FR “propre”
-        month_name = [k for k,v in MONTHS_FR.items() if v == month_target and len(k) > 3][0]
-        month_name = month_name.replace("fevrier", "février").replace("decembre", "décembre").replace("aout","août")
-    
-        if clients_mentionnes:
-            return (
-                f"En **{month_name.title()} {year_target}**, le chiffre d’affaires réalisé avec "
-                f"**{clients_mentionnes[0].upper()}** est de **{ca_month:,.2f} €**."
-            )
-        else:
-            return (
-                f"En **{month_name.title()} {year_target}**, le chiffre d’affaires total est de **{ca_month:,.2f} €**."
-            )
-
     
 
 
-
+    
     # =================================================================================
     # RÈGLES MÉTIER SÉMANTIQUES (SERVICE)
     # =================================================================================
@@ -2968,10 +3264,6 @@ def clean_llm_text(text: str) -> str:
     return text.strip()
 
 
-
-
-
-
 # ==================================================================================================== #
 #                           UTILISATION DU LLM DEPUIS SNOWFLAKE                                        #
 # ==================================================================================================== #
@@ -3043,6 +3335,8 @@ def ask_llm(
 
     # --- Création du prompt final
     formatted_prompt = format_prompt(question, context, context_olga, context_olga_countries,context_equipement_client,context_olga_bu)
+
+
 
 
 
