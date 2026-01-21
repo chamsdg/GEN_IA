@@ -15,6 +15,28 @@ from snowflake.snowpark import Session
 import json
 import re
 
+from utils import (
+    is_yearly_analysis,
+    build_ca_by_year,
+    yearly_analysis_allowed,
+    find_countries_in_question_v3,
+    resolve_country_overlaps,
+    suppress_clients_when_country_query,
+    is_country_first_intent,
+    extract_year_from_question,
+    extract_years_from_question,
+    build_ca_by_month,
+    extract_month_from_question,
+    is_revenue_intent,
+    is_monthly_analysis,
+    is_comparison_intent,
+    is_par_mois_only,
+    render_monthly_ca_table,
+    build_monthly_sales,
+    find_clients_in_question_v3,
+    is_month_specific_request
+)
+
 
 
 
