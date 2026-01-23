@@ -2391,6 +2391,9 @@ MONTHS_FR = {
 
     
 # -------------------------------------- CAS SPECIFIQUE CA PAR ANNEE ----------------------------
+
+    
+# -------------------------------------- CAS SPECIFIQUE CA PAR ANNEE ----------------------------
 def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     # =================================================================================
     # NORMALISATION DE BASE
@@ -2495,7 +2498,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
     # =================================================================================
-    # 1bis) CAS CA SUR UN MOIS PRECIS (PAYS)
+    # 1) CAS CA SUR UN MOIS PRECIS (PAYS)
     # ex: "donne le ca du Sénégal au mois de mars 2025"
     # =================================================================================
     month_target = extract_month_from_question(q)
@@ -2546,7 +2549,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
     # =================================================================================
-    # 1) CAS CA SUR UN MOIS PRECIS (ex: "donne le ca SNIM au mois de mars 2025")
+    # 2) CAS CA SUR UN MOIS PRECIS (ex: "donne le ca SNIM au mois de mars 2025")
     # =================================================================================
     month_target = extract_month_from_question(q)
     year_target  = extract_year_from_question(q)
@@ -2588,9 +2591,77 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
 
-    
+
     # =================================================================================
-    # 2) CAS COMPARAISON CA MENSUEL ENTRE DEUX PAYS
+    # 3) CA / COMPARAISON ENTRE DEUX ANNÉES POUR 1 PAYS
+    # ex: "donne le ca du sénégal entre 2024 et 2025"
+    # =================================================================================
+    import re
+    
+    if (
+        is_revenue_intent(q)
+        and not is_monthly_analysis(q)
+        and not is_month_specific_request(q)
+        and len(pays_mentionnes) == 1
+        and not clients_mentionnes
+    ):
+        pays = pays_mentionnes[0]
+    
+        # 1) récup des années
+        years_requested = extract_years_from_question(q)
+    
+        # fallback si extract_years... rate
+        if not years_requested:
+            years_requested = [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", q)]
+    
+        years_requested = sorted(set(years_requested))
+    
+        # si >2 années, on prend les 2 dernières
+        if len(years_requested) > 2:
+            years_requested = years_requested[-2:]
+    
+        # on ne déclenche ce bloc QUE si on a exactement 2 années
+        if len(years_requested) == 2:
+            y1, y2 = years_requested[0], years_requested[1]
+    
+            df_pays = fact[fact["pays_clean"] == pays].copy()
+    
+            df_y1 = df_pays[df_pays["date_facture_dt"].dt.year == y1]
+            df_y2 = df_pays[df_pays["date_facture_dt"].dt.year == y2]
+    
+            ca_y1 = float(df_y1["GFD_MONTANT_VENTE_EUROS"].sum()) if not df_y1.empty else 0.0
+            ca_y2 = float(df_y2["GFD_MONTANT_VENTE_EUROS"].sum()) if not df_y2.empty else 0.0
+    
+            if ca_y1 == 0.0 and ca_y2 == 0.0:
+                return (
+                    f"Aucune donnée de chiffre d’affaires disponible pour "
+                    f"**{pays.upper()}** en **{y1}** et **{y2}**."
+                )
+    
+            diff = ca_y2 - ca_y1
+            pct = (diff / ca_y1 * 100) if ca_y1 != 0 else None
+    
+            if diff > 0:
+                trend = "📈 Hausse"
+            elif diff < 0:
+                trend = "📉 Baisse"
+            else:
+                trend = "➡️ Stable"
+    
+            out = (
+                f"## Comparaison du chiffre d’affaires – {pays.upper()} – {y1} vs {y2}\n\n"
+                f"| Année | CA (€) |\n"
+                f"|------:|-------:|\n"
+                f"| {y1} | {ca_y1:,.2f} € |\n"
+                f"| {y2} | {ca_y2:,.2f} € |\n"
+                f"\n**Écart ({y2} - {y1}) : {diff:+,.2f} €**"
+            )
+            out += f" (**{pct:+.1f} %**)" if pct is not None else " (pourcentage non calculable – CA de référence nul)"
+            out += f"\n\n{trend} entre **{y1}** et **{y2}**."
+            return out
+
+    # =================================================================================
+    # 4) CAS COMPARAISON CA MENSUEL ENTRE DEUX PAYS
     # ex: "compare le CA du Sénégal vs Côte d'Ivoire par mois en 2025"
     # =================================================================================
     if (
@@ -2659,7 +2730,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
     # =================================================================================
-    # 3) CAS COMPARAISON CA MENSUEL ENTRE DEUX CLIENTS
+    # 5) CAS COMPARAISON CA MENSUEL ENTRE DEUX CLIENTS
     # =================================================================================
     if (
         is_comparison_intent(q)
@@ -2711,7 +2782,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
     # =================================================================================
-    # X) COMPARAISON YTD vs LYTD POUR 1 PAYS
+    # 6) COMPARAISON YTD vs LYTD POUR 1 PAYS
     # ex: "compare le CA du Sénégal cette année vs l'année dernière"
     # =================================================================================
     if (
@@ -2755,7 +2826,85 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
     # =================================================================================
-    # 4) CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX PAYS
+    # 7) COMPARAISON CA ENTRE DEUX ANNÉES POUR 1 CLIENT
+    # ex: "compare le ca de la snim entre 2024 et 2025"
+    # =================================================================================
+    import re
+    
+    if (
+        is_comparison_intent(q)
+        and is_revenue_intent(q)
+        and len(clients_mentionnes) == 1
+        and not pays_mentionnes
+        and not is_monthly_analysis(q)
+        and not is_month_specific_request(q)
+    ):
+        client = clients_mentionnes[0]
+    
+        # 1) récup des années
+        years_requested = extract_years_from_question(q)
+    
+        # fallback si extract_years... rate
+        if not years_requested:
+            years_requested = [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", q)]
+    
+        # normalisation (unique + tri)
+        years_requested = sorted(set(years_requested))
+    
+        # si >2 années, on prend les 2 dernières (souvent plus logique dans les questions)
+        if len(years_requested) > 2:
+            years_requested = years_requested[-2:]
+    
+        # si pas exactement 2 années -> message aide
+        if len(years_requested) != 2:
+            return (
+                f"Pour comparer le CA de **{client.upper()}**, j’ai besoin de **2 années** "
+                f"(ex: 2024 et 2025). Années détectées : {list(years_requested)}."
+            )
+    
+        y1, y2 = years_requested[0], years_requested[1]
+    
+        # 2) filtre data
+        df_client = fact[fact["client_clean"] == client].copy()
+    
+        df_y1 = df_client[df_client["date_facture_dt"].dt.year == y1]
+        df_y2 = df_client[df_client["date_facture_dt"].dt.year == y2]
+    
+        ca_y1 = float(df_y1["GFD_MONTANT_VENTE_EUROS"].sum()) if not df_y1.empty else 0.0
+        ca_y2 = float(df_y2["GFD_MONTANT_VENTE_EUROS"].sum()) if not df_y2.empty else 0.0
+    
+        # 3) gestion absence données
+        if ca_y1 == 0.0 and ca_y2 == 0.0:
+            return f"Aucune donnée de chiffre d’affaires disponible pour **{client.upper()}** en **{y1}** et **{y2}**."
+    
+        diff = ca_y2 - ca_y1
+        pct = (diff / ca_y1 * 100) if ca_y1 != 0 else None
+    
+        # 4) commentaire narratif
+        if diff > 0:
+            trend = "📈 Hausse"
+        elif diff < 0:
+            trend = "📉 Baisse"
+        else:
+            trend = "➡️ Stable"
+    
+        # 5) rendu
+        out = (
+            f"## Comparaison du chiffre d’affaires – {client.upper()} – {y1} vs {y2}\n\n"
+            f"| Année | CA (€) |\n"
+            f"|------:|-------:|\n"
+            f"| {y1} | {ca_y1:,.2f} € |\n"
+            f"| {y2} | {ca_y2:,.2f} € |\n"
+            f"\n**Écart ({y2} - {y1}) : {diff:+,.2f} €**"
+        )
+        out += f" (**{pct:+.1f} %**)" if pct is not None else " (pourcentage non calculable – CA de référence nul)"
+    
+        out += f"\n\n{trend} entre **{y1}** et **{y2}**."
+        return out
+
+
+    # =================================================================================
+    # 8) CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX PAYS
     # ex: "compare le CA du Sénégal vs Côte d'Ivoire en 2025"
     # =================================================================================
     if (
@@ -2835,7 +2984,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
         
     
     # =================================================================================
-    # 5) CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX CLIENTS
+    # 9) CAS COMPARAISON CA ANNUELLE / YTD ENTRE DEUX CLIENTS
     # =================================================================================
     if (
         is_comparison_intent(q)
@@ -2902,7 +3051,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
     
 
     # =================================================================================
-    #6)  CAS CA D’UN PAYS POUR UNE ANNÉE PRÉCISE
+    #10)  CAS CA D’UN PAYS POUR UNE ANNÉE PRÉCISE
     # ex: "donne le CA du Sénégal en 2025"
     # =================================================================================
     if (
@@ -2936,8 +3085,45 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
         )
 
 
+
     # =================================================================================
-    # 7) CA PAR ANNÉE (PAYS si mentionné, sinon GLOBAL)
+    # 11)  CAS CA D’UN CLIENT POUR UNE ANNÉE PRÉCISE
+    # ex: "donne le CA de la SNIM en 2025"
+    # =================================================================================
+    if (
+        is_revenue_intent(q)
+        and not is_comparison_intent(q)
+        and not is_monthly_analysis(q)
+        and not is_month_specific_request(q)
+        and clients_mentionnes
+        and not pays_mentionnes
+        and extract_year_from_question(q) is not None
+    ):
+        client = clients_mentionnes[0]
+        year_target = extract_year_from_question(q)
+    
+        df_target = fact.copy()
+        df_target = df_target[
+            (df_target["client_clean"] == client)
+            & (df_target["date_facture_dt"].dt.year == year_target)
+        ]
+    
+        if df_target.empty:
+            return (
+                f"Aucune donnée de chiffre d’affaires disponible pour "
+                f"{client.upper()} en {year_target}."
+            )
+    
+        ca_total = df_target["GFD_MONTANT_VENTE_EUROS"].sum()
+    
+        return (
+            f"## Chiffre d’affaires – {client.upper()} – {year_target}\n\n"
+            f"- **CA total** : {ca_total:,.2f} €\n"
+            f"- **Période analysée** : année complète {year_target}\n"
+        )
+
+    # =================================================================================
+    # 12) CA PAR ANNÉE (PAYS si mentionné, sinon GLOBAL)
     # =================================================================================
     if is_yearly_analysis(q) and is_revenue_intent(q) and pays_mentionnes and not is_comparison_intent(q):
         years_requested = extract_years_from_question(q)
@@ -2964,7 +3150,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
 
     # =================================================================================
-    # 8) CAS CA PAR ANNÉE (CLIENT)
+    # 13) CAS CA PAR ANNÉE (CLIENT)
     # =================================================================================
     if (
         is_yearly_analysis(q)
@@ -2993,7 +3179,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
      
 
     # =================================================================================
-    # 9) CAS CA MENSUEL (FACTURES) - PAYS : ex "donne le CA du Sénégal par mois en 2025"
+    # 14) CAS CA MENSUEL (FACTURES) - PAYS : ex "donne le CA du Sénégal par mois en 2025"
     # =================================================================================
     if is_monthly_analysis(q) and is_revenue_intent(q) and pays_mentionnes and not is_month_specific_request(q) and not is_comparison_intent(q):
         years_requested = extract_years_from_question(q)
@@ -3041,7 +3227,7 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
     
     # =================================================================================
-    # 10) CAS CA MENSUEL CLIENT : ex "donne le CA de la SNIM par mois en 2025"
+    # 15) CAS CA MENSUEL CLIENT : ex "donne le CA de la SNIM par mois en 2025"
     # =================================================================================
     if is_monthly_analysis(q) and is_revenue_intent(q) and clients_mentionnes and not is_month_specific_request(q):
         years_requested = extract_years_from_question(q)
