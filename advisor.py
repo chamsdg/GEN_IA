@@ -1,14 +1,7 @@
 # advisor.py
 import json
 from pathlib import Path
-
-PROMPT_DIR = Path(__file__).parent / "prompts"
-
-def load_prompt(name: str) -> str:
-    path = PROMPT_DIR / name
-    if not path.exists():
-        raise FileNotFoundError(f"Prompt not found: {path}")
-    return path.read_text(encoding="utf-8")
+from fonction import load_template
 
 
 def _clean_suggestions(text: str) -> str:
@@ -45,7 +38,7 @@ def make_suggestions(run_llm_func, question: str, answer: str, model: str, tempe
     run_llm_func: ta fonction d'appel LLM (celle qui parle à Cortex ou autre).
     On l'injecte pour ne pas dupliquer ton code.
     """
-    base_prompt = load_prompt("advisor_suggestions.txt")
+    base_prompt = load_template("advisor_suggestions.txt")
 
     payload = {
         "question": question,
@@ -69,3 +62,4 @@ CONTEXTE (JSON):
     sugg_text = _clean_suggestions(sugg_text)
 
     return sugg_text
+
