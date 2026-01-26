@@ -2482,17 +2482,17 @@ def generate_summary(fact: pd.DataFrame, question: str = "") -> str:
 
     clients_mentionnes = suppress_clients_when_country_query(q, clients_mentionnes, pays_mentionnes)
 
-     # 🔍 DEBUG ICI (OBLIGATOIRE)
-    with st.sidebar:
-        st.markdown("### DEBUG ROUTING")
-        st.write("q:", q)
-        st.write("is_comparison_intent:", is_comparison_intent(q))
-        st.write("is_revenue_intent:", is_revenue_intent(q))
-        st.write("is_monthly_analysis:", is_monthly_analysis(q))
-        st.write("clients_mentionnes:", clients_mentionnes)
-        st.write("len(clients_mentionnes):", len(clients_mentionnes))
-        st.write("pays_mentionnes:", pays_mentionnes)
-        st.write("len(pays_mentionnes):", len(pays_mentionnes))
+    # 🔍 DEBUG ICI (OBLIGATOIRE)
+  #  with st.sidebar:
+  #      st.markdown("### DEBUG ROUTING")
+  #      st.write("q:", q)
+  #      st.write("is_comparison_intent:", is_comparison_intent(q))
+  #      st.write("is_revenue_intent:", is_revenue_intent(q))
+  #      st.write("is_monthly_analysis:", is_monthly_analysis(q))
+  #      st.write("clients_mentionnes:", clients_mentionnes)
+  #      st.write("len(clients_mentionnes):", len(clients_mentionnes))
+   #     st.write("pays_mentionnes:", pays_mentionnes)
+   #     st.write("len(pays_mentionnes):", len(pays_mentionnes))
 
    
 
