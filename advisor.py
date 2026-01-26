@@ -1,15 +1,10 @@
-# advisor.py
 import json
-from pathlib import Path
+import re
 
-PROMPT_DIR = Path(__file__).parent / "prompts"
-
-def load_prompt(name: str) -> str:
-    path = PROMPT_DIR / name
-    if not path.exists():
-        raise FileNotFoundError(f"Prompt not found: {path}")
-    return path.read_text(encoding="utf-8")
-
+def load_template(file_path: str) -> str:
+    """Charge un template texte et le retourne comme chaîne"""
+    with open(file_path, "r", encoding="utf-8") as f:
+        return f.read()
 
 def _clean_suggestions(text: str) -> str:
     """
@@ -21,13 +16,11 @@ def _clean_suggestions(text: str) -> str:
 
     t = text.strip()
 
-    # hard block: chiffres / monnaie / %
-    if any(x in t for x in ["€", "%"]):
+    # Blocage si présence de symboles monétaires ou pourcentages
+    if any(x in t for x in ["€", "%", "$"]):
         return ""
 
-    # bloque aussi les nombres (simple)
-    # (si tu veux autoriser '3 mois' enlève ce bloc)
-    import re
+    # Blocage si présence de chiffres
     if re.search(r"\d", t):
         return ""
 
@@ -39,33 +32,25 @@ def _clean_suggestions(text: str) -> str:
 
     return "\n".join(lines[:3]).strip()
 
-
 def make_suggestions(run_llm_func, question: str, answer: str, model: str, temperature: float):
-    """
-    run_llm_func: ta fonction d'appel LLM (celle qui parle à Cortex ou autre).
-    On l'injecte pour ne pas dupliquer ton code.
-    """
-    base_prompt = load_prompt("advisor_suggestions.txt")
+    # Lecture directe du fichier à la racine
+    base_prompt = load_template("advisor_suggestions.txt")
 
     payload = {
         "question": question,
         "answer": answer
     }
 
-    prompt = f"""{base_prompt}
+    # Construction du prompt final
+    prompt = f"{base_prompt}\n\nCONTEXTE (JSON):\n{json.dumps(payload, ensure_ascii=False)}"
 
-CONTEXTE (JSON):
-{json.dumps(payload, ensure_ascii=False)}
-"""
-
-    # Ici on réutilise ton run_llm (ou une fonction LLM bas niveau)
+    # Appel de ton LLM (Cortex ou autre)
     sugg_text, _, _ = run_llm_func(
         question=prompt,
         model=model,
         temperature=temperature,
-        progress=None  # pas de barre de progression pour les suggestions
+        progress=None
     )
 
-    sugg_text = _clean_suggestions(sugg_text)
-
-    return sugg_text
+    # Nettoyage selon tes règles strictes
+    return _clean_suggestions(sugg_text)
