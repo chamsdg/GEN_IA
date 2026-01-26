@@ -14,6 +14,8 @@ from ventes import build_monthly_sales, build_monthly_sales_by_client
 from charts import build_line_chart, build_multi_line_chart
 from charts import build_evolution_title
 
+from advisor import make_suggestions
+
 
 
 
@@ -152,6 +154,25 @@ def process_question(model, temperature):
         st.markdown(answer, unsafe_allow_html=True)
         st.markdown(f"⏱️ **Temps de réponse : {duration:.2f} s**")
 
+
+        # 2️⃣ Suggestions (LLM séparé, stable)
+        try:
+            sugg = make_suggestions(
+                run_llm_func=run_llm,     # IMPORTANT: run_llm retourne (answer, duration, timings)
+                question=question,
+                answer=answer,
+                model=model,
+                temperature=0.0           # stable / pas de blabla
+            )
+        except Exception:
+            sugg = ""
+
+        sugg = (sugg or "").strip()
+        st.session_state["suggestions"] = sugg  # optionnel
+
+        if sugg:
+             render_llm_suggestions(sugg)
+            
     # ====================================================
     # 2️⃣ SI QUESTION = ÉVOLUTION → GRAPH INTELLIGENT
     # ====================================================
