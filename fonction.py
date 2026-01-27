@@ -243,7 +243,9 @@ def find_clients_in_question_v2(question: str, client_list: list, threshold: int
         "jour", "jours", "quotidien", "hebdo", "hebdomadaire",
         "trimestre", "trimestriel", "annee", "annuel", "annuelle", "semaine", "semaines",
         "periode", "periode", "date", "dates",
-        "entre", "en", "a", "à"
+        "entre", "en", "a", "à",
+
+        "opportunite","opportunites","pipeline","olga",
     }
 
     # tokens "propres"
@@ -821,7 +823,7 @@ def generate_olga(final: pd.DataFrame, question: str = "") -> str:
     df["client_clean"] = df["RAISON_SOCIALE"].astype(str).str.lower().str.strip()
 
     client_list = df["client_clean"].dropna().unique().tolist()
-    clients_mentionnes = find_clients_in_question(question, client_list)
+    clients_mentionnes = find_clients_in_question_v2(question, client_list)
     clients_mentionnes = [c.lower().strip() for c in clients_mentionnes]
 
     # 3) Mensuel OLGA UNIQUEMENT si intention opportunité + mots temporels
