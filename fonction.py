@@ -3567,12 +3567,12 @@ def ask_llm(
 
         options = {
             'temperature': temperature,
-            'max_tokens': 8192,
+            'max_tokens': 2000,
             'guardrails': True
         }
 
         sql_query = "SELECT AI_COMPLETE(?, ?, ?) as response"
-        result = session.sql(sql_query, params=[model, prompt_array, options]).collect()
+        result = session.sql(sql_query, params=[model, prompt_array, options]).collect() #8192
 
         if not result or len(result) == 0:
             return {"source": "error", "response": "Aucune réponse de Cortex AI"}
