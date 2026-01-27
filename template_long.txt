@@ -212,6 +212,9 @@ Exemples de réponses attendues :
 ### Données disponibles Opportunités Pays
 {context_olga_countries}
 
+### DONNEES DISPONIBLES OPPORTUNITES BU
+{context_olga_bu}
+
 ### Données disponibles sur les equipements:
 {context_equipement_client}
 
